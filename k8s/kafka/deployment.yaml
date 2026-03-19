@@ -64,8 +64,8 @@ spec:
           value: "MkU3OEI2NThsNXMtMzE1Lg"
         resources:
           requests:
-            cpu: "250m"
-            memory: "512Mi"
+            cpu: "100m"
+            memory: "256Mi"
           limits:
             cpu: "500m"
-            memory: "1Gi"
+            memory: "512Mi"
