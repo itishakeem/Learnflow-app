@@ -16,7 +16,7 @@ app = FastAPI(title="concepts-agent", version="1.0.0")
 PUBSUB_NAME = os.getenv("PUBSUB_NAME", "kafka-pubsub")
 TOPIC_NAME = os.getenv("TOPIC_NAME", "learning.concept.generated")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-04-17")
 
 genai.configure(api_key=GEMINI_API_KEY)
 

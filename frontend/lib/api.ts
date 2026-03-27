@@ -12,13 +12,11 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 function post<T>(url: string, body: unknown): Promise<T> {
-  return json(
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-  );
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((res) => json<T>(res));
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -148,5 +146,5 @@ export function debugCode(params: {
 // ── Progress ──────────────────────────────────────────────────────────────────
 
 export function getProgress(user_id: string): Promise<ProgressResponse> {
-  return json(fetch(`${BASE}/progress/progress?user_id=${encodeURIComponent(user_id)}`));
+  return fetch(`${BASE}/progress/progress?user_id=${encodeURIComponent(user_id)}`).then((res) => json<ProgressResponse>(res));
 }

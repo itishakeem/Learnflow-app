@@ -3,9 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 // Server-side env vars — read at request time, set via K8s ConfigMap
 const SERVICE_URLS: Record<string, string> = {
   triage: process.env.TRIAGE_URL ?? "http://triage:8000",
-  concepts: process.env.CONCEPTS_URL ?? "http://concepts:8000",
-  exercise: process.env.EXERCISE_URL ?? "http://exercise:8000",
-  progress: process.env.PROGRESS_URL ?? "http://progress:8000",
+  concepts: process.env.CONCEPTS_URL ?? "http://concepts-agent:8000",
+  exercise: process.env.EXERCISE_URL ?? "http://exercise-agent:8000",
+  progress: process.env.PROGRESS_URL ?? "http://progress-agent:8000",
+  debug: process.env.DEBUG_URL ?? "http://debug-agent:8000",
 };
 
 type Params = Promise<{ service: string; path: string[] }>;
