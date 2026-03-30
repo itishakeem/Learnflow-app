@@ -100,8 +100,7 @@ async def explain(request: ExplainRequest):
             request.concept,
         )
     except Exception as exc:
-        logger.error("Failed to publish event: %s", exc)
-        raise HTTPException(status_code=503, detail="Event publish failed") from exc
+        logger.warning("Failed to publish event (non-fatal): %s", exc)
 
     return {
         "status": "ok",
