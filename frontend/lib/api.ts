@@ -42,6 +42,7 @@ export interface ExerciseData {
   hints: string[];
   expected_output: string;
   difficulty: "beginner" | "intermediate" | "advanced";
+  solution?: string;
 }
 
 export interface ExerciseResponse {

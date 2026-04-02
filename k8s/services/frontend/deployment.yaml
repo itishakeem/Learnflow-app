@@ -4,10 +4,12 @@ metadata:
   name: frontend-config
   namespace: learnflow
 data:
-  TRIAGE_URL: "http://triage:8000"
-  CONCEPTS_URL: "http://concepts:8000"
-  EXERCISE_URL: "http://exercise:8000"
-  PROGRESS_URL: "http://progress:8000"
+  # Service names must match the K8s Service names in each deployment
+  TRIAGE_URL:   "http://triage:8000"
+  CONCEPTS_URL: "http://concepts-agent:8000"
+  EXERCISE_URL: "http://exercise-agent:8000"
+  PROGRESS_URL: "http://progress-agent:8000"
+  DEBUG_URL:    "http://debug-agent:8000"
   HOSTNAME: "0.0.0.0"
   PORT: "3000"
 ---
@@ -42,18 +44,23 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
+        # Use the lightweight / route, not /dashboard (which triggers SSR + API calls)
         readinessProbe:
           httpGet:
-            path: /dashboard
+            path: /
             port: 3000
-          initialDelaySeconds: 10
+          initialDelaySeconds: 15
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: /dashboard
+            path: /
             port: 3000
-          initialDelaySeconds: 20
+          initialDelaySeconds: 30
           periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
 ---
 apiVersion: v1
 kind: Service

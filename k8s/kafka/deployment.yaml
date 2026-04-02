@@ -10,6 +10,8 @@ spec:
   - name: client
     port: 9092
     targetPort: 9092
+  # Headless service for StatefulSet stable DNS (kafka-0.kafka)
+  clusterIP: None
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -22,6 +24,15 @@ spec:
   selector:
     matchLabels:
       app: kafka
+  # PVC template — persists logs across pod restarts so topic metadata survives
+  volumeClaimTemplates:
+  - metadata:
+      name: kafka-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 2Gi
   template:
     metadata:
       labels:
@@ -59,13 +70,35 @@ spec:
         - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
           value: "true"
         - name: KAFKA_LOG_DIRS
-          value: "/tmp/kraft-combined-logs"
+          value: "/var/kafka/kraft-logs"
         - name: CLUSTER_ID
           value: "MkU3OEI2NThsNXMtMzE1Lg"
+        # Reduce JVM heap — default 1g is too much for a local cluster
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xmx512m -Xms256m"
+        volumeMounts:
+        - name: kafka-data
+          mountPath: /var/kafka
         resources:
           requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "500m"
+            cpu: "200m"
             memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        # Readiness: TCP check on broker port
+        readinessProbe:
+          tcpSocket:
+            port: 9092
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        # Liveness: same — if broker port stops responding, restart the pod
+        livenessProbe:
+          tcpSocket:
+            port: 9092
+          initialDelaySeconds: 40
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3

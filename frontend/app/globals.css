@@ -1,3 +1,210 @@
+/* ─── Google Fonts — must come BEFORE tailwind directives ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..800;1,14..32,300..800&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ─── CSS Custom Properties ────────────────────────────── */
+:root {
+  --nav-height: 64px;
+  --page-max:   80rem;   /* 1280px — consistent page max-width */
+}
+
+/* ─── Base Reset & Foundations ─────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    font-family: "Inter", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
+    tab-size: 2;
+  }
+
+  body {
+    background-color: #0a0a0f;
+    color: #f0f0ff;
+    min-height: 100dvh;
+    line-height: 1.6;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar              { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track        { background: transparent; }
+  ::-webkit-scrollbar-thumb        { background: #1a1a2e; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover  { background: #2e2e4a; }
+
+  /* Text selection */
+  ::selection {
+    background: rgba(139, 92, 246, 0.3);
+    color: #f0f0ff;
+  }
+
+  /* Keyboard focus ring — visible only for keyboard navigation */
+  :focus-visible {
+    outline: 2px solid rgba(139, 92, 246, 0.7);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  :focus:not(:focus-visible) { outline: none; }
+
+  /* Better image rendering */
+  img, video { max-width: 100%; display: block; }
+
+  /* Prevent layout shift from scrollbar */
+  html { scrollbar-gutter: stable; }
+}
+
+/* ─── Component Utilities ──────────────────────────────── */
+@layer components {
+  /* Consistent page wrapper */
+  .page-container {
+    @apply max-w-5xl mx-auto px-4 sm:px-6;
+  }
+
+  /* Marketing section max-width (wider) */
+  .section-container {
+    @apply max-w-6xl mx-auto px-4 sm:px-6;
+  }
+
+  /* Section overline label */
+  .section-label {
+    @apply text-2xs font-semibold uppercase tracking-widest;
+  }
+
+  /* Glass morphism surface */
+  .glass {
+    background: rgba(15, 15, 24, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(26, 26, 46, 0.8);
+  }
+
+  /* Gradient text utility */
+  .text-gradient {
+    background: linear-gradient(135deg, #a78bfa 0%, #22d3ee 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Shimmer skeleton */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      #0f0f18 25%,
+      #1e1e30 50%,
+      #0f0f18 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.8s linear infinite;
+    border-radius: 0.5rem;
+  }
+
+  /* Base input style — used directly and via Input component */
+  .input-base {
+    @apply w-full bg-surface-raised border border-surface-border rounded-xl
+           px-4 py-2.5 text-sm text-ink-primary
+           placeholder:text-ink-disabled
+           focus:outline-none focus:border-brand/60 focus:ring-2 focus:ring-brand/20
+           transition-all duration-200;
+  }
+  .input-base:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+
+  /* Card hover lift */
+  .card-interactive {
+    @apply transition-all duration-300 cursor-pointer;
+  }
+  .card-interactive:hover {
+    border-color: rgba(139, 92, 246, 0.28);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(139, 92, 246, 0.08);
+    transform: translateY(-3px);
+  }
+
+  /* Tab variants */
+  .tab-active   { @apply text-brand-300 border-b-2 border-brand-400 font-semibold; }
+  .tab-inactive {
+    @apply text-ink-disabled hover:text-ink-secondary border-b-2 border-transparent
+           transition-colors duration-150;
+  }
+
+  /* Section divider */
+  .section-divider {
+    @apply border-t border-surface-border;
+  }
+
+  /* Prose content area */
+  .prose-dark {
+    @apply text-ink-secondary leading-relaxed text-sm;
+  }
+  .prose-dark strong { @apply text-ink-primary font-semibold; }
+  .prose-dark code   {
+    @apply font-mono text-xs bg-surface-border/60 px-1.5 py-0.5 rounded text-brand-300;
+  }
+
+  /* Gradient border card — subtle animated border using box-shadow */
+  .card-glow-brand {
+    box-shadow:
+      inset 0 0 0 1px rgba(139, 92, 246, 0.18),
+      0 2px 16px rgba(0, 0, 0, 0.35);
+    transition: box-shadow 0.3s ease;
+  }
+  .card-glow-brand:hover {
+    box-shadow:
+      inset 0 0 0 1px rgba(139, 92, 246, 0.35),
+      0 0 40px rgba(139, 92, 246, 0.12),
+      0 8px 40px rgba(0, 0, 0, 0.5);
+  }
+
+  .card-glow-success {
+    box-shadow:
+      inset 0 0 0 1px rgba(52, 211, 153, 0.15),
+      0 2px 16px rgba(0, 0, 0, 0.35);
+    transition: box-shadow 0.3s ease;
+  }
+  .card-glow-success:hover {
+    box-shadow:
+      inset 0 0 0 1px rgba(52, 211, 153, 0.30),
+      0 0 40px rgba(52, 211, 153, 0.10),
+      0 8px 40px rgba(0, 0, 0, 0.5);
+  }
+
+  .card-glow-accent {
+    box-shadow:
+      inset 0 0 0 1px rgba(34, 211, 238, 0.15),
+      0 2px 16px rgba(0, 0, 0, 0.35);
+    transition: box-shadow 0.3s ease;
+  }
+  .card-glow-accent:hover {
+    box-shadow:
+      inset 0 0 0 1px rgba(34, 211, 238, 0.30),
+      0 0 40px rgba(34, 211, 238, 0.10),
+      0 8px 40px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Input focus glow */
+  .input-base:focus {
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.20);
+  }
+}
+
+/* ─── Utility Layer ─────────────────────────────────────── */
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* Prevent text overflow */
+  .text-balance { text-wrap: balance; }
+
+  /* Visually hide but keep accessible */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+}

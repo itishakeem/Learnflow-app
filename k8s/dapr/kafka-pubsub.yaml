@@ -6,7 +6,8 @@ metadata:
 spec:
   type: pubsub.kafka
   version: v1
-  initTimeout: 60s
+  # Give Kafka extra time on cold start before Dapr gives up
+  initTimeout: 120s
   metadata:
   - name: brokers
     value: "kafka:9092"
@@ -16,3 +17,10 @@ spec:
     value: "none"
   - name: initialOffset
     value: "newest"
+  # Retry failed publishes up to 3 times with 2s backoff
+  - name: maxRetries
+    value: "3"
+  - name: backOffDelay
+    value: "2s"
+  - name: backOffMaxDelay
+    value: "10s"

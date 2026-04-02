@@ -1,10 +1,99 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { generateExercise, submitCode, debugCode, type ExerciseData, type DebugAnalysis } from "@/lib/api";
+import { motion, AnimatePresence } from "framer-motion";
+import { Zap, Bug, CheckCircle2, ChevronDown, Palette, Eye, EyeOff } from "lucide-react";
+import type { Monaco } from "@monaco-editor/react";
+import {
+  generateExercise, submitCode, debugCode,
+  type ExerciseData, type DebugAnalysis,
+} from "@/lib/api";
+import { useAuth, GUEST_LIMITS } from "@/lib/auth";
+import { GuestUsageBadge, UpgradeModal } from "@/components/auth/GuestGate";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
+import Alert from "@/components/ui/Alert";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+
+// ── Editor theme definitions ──────────────────────────────────────────────────
+
+type EditorTheme = "vs-dark" | "dracula" | "monokai" | "light";
+
+const EDITOR_THEMES: { id: EditorTheme; label: string; bg: string }[] = [
+  { id: "vs-dark",  label: "Dark",    bg: "#1e1e1e" },
+  { id: "dracula",  label: "Dracula", bg: "#282a36" },
+  { id: "monokai",  label: "Monokai", bg: "#272822" },
+  { id: "light",    label: "Light",   bg: "#fffffe" },
+];
+
+function defineCustomThemes(monaco: Monaco) {
+  monaco.editor.defineTheme("dracula", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment",           foreground: "6272a4", fontStyle: "italic" },
+      { token: "keyword",           foreground: "ff79c6" },
+      { token: "string",            foreground: "f1fa8c" },
+      { token: "number",            foreground: "bd93f9" },
+      { token: "type",              foreground: "8be9fd", fontStyle: "italic" },
+      { token: "function",          foreground: "50fa7b" },
+      { token: "variable",          foreground: "f8f8f2" },
+      { token: "operator",          foreground: "ff79c6" },
+      { token: "delimiter",         foreground: "f8f8f2" },
+      { token: "identifier",        foreground: "f8f8f2" },
+    ],
+    colors: {
+      "editor.background":              "#282a36",
+      "editor.foreground":              "#f8f8f2",
+      "editor.lineHighlightBackground": "#44475a55",
+      "editor.selectionBackground":     "#44475a",
+      "editorCursor.foreground":        "#f8f8f0",
+      "editorLineNumber.foreground":    "#6272a4",
+      "editorLineNumber.activeForeground": "#f8f8f2",
+      "editor.inactiveSelectionBackground": "#44475a88",
+      "editorIndentGuide.background1":   "#3d3f4e",
+      "scrollbar.shadow":               "#000000",
+      "scrollbarSlider.background":     "#44475a88",
+      "scrollbarSlider.hoverBackground":"#44475aaa",
+    },
+  });
+
+  monaco.editor.defineTheme("monokai", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment",    foreground: "75715e", fontStyle: "italic" },
+      { token: "keyword",    foreground: "f92672" },
+      { token: "string",     foreground: "e6db74" },
+      { token: "number",     foreground: "ae81ff" },
+      { token: "type",       foreground: "66d9e8" },
+      { token: "function",   foreground: "a6e22e" },
+      { token: "variable",   foreground: "f8f8f2" },
+      { token: "operator",   foreground: "f92672" },
+      { token: "delimiter",  foreground: "f8f8f2" },
+      { token: "identifier", foreground: "f8f8f2" },
+    ],
+    colors: {
+      "editor.background":              "#272822",
+      "editor.foreground":              "#f8f8f2",
+      "editor.lineHighlightBackground": "#3e3d3255",
+      "editor.selectionBackground":     "#49483e",
+      "editorCursor.foreground":        "#f8f8f0",
+      "editorLineNumber.foreground":    "#75715e",
+      "editorLineNumber.activeForeground": "#f8f8f2",
+      "editor.inactiveSelectionBackground": "#49483e88",
+      "editorIndentGuide.background1":   "#3b3a32",
+      "scrollbarSlider.background":     "#49483e88",
+      "scrollbarSlider.hoverBackground":"#49483eaa",
+    },
+  });
+}
+
+const THEME_STORAGE_KEY = "learnflow_editor_theme";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const DIFFICULTIES = ["beginner", "intermediate", "advanced"] as const;
 type Difficulty = (typeof DIFFICULTIES)[number];
@@ -16,7 +105,23 @@ function newSessionId() { return `session-${Date.now()}`; }
 
 type SidePanel = "exercise" | "debug" | "result";
 
+const levelVariant = (d: string): "success" | "warning" | "danger" => {
+  if (d === "beginner") return "success";
+  if (d === "intermediate") return "warning";
+  return "danger";
+};
+
+const PANEL_ICONS: Record<SidePanel, React.ReactNode> = {
+  exercise: <Zap size={13} />,
+  debug:    <Bug size={13} />,
+  result:   <CheckCircle2 size={13} />,
+};
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function ExercisePage() {
+  const { isGuest, user, consumeGuestUsage, usage } = useAuth();
+
   const [topic, setTopic]           = useState(TOPICS[0]);
   const [difficulty, setDifficulty] = useState<Difficulty>("beginner");
   const [exercise, setExercise]     = useState<ExerciseData | null>(null);
@@ -29,19 +134,42 @@ export default function ExercisePage() {
   const [submitResult, setSubmitResult] = useState<{ status: string; session_id: string } | null>(null);
   const [debugResult, setDebugResult]   = useState<DebugAnalysis | null>(null);
   const [apiError, setApiError]         = useState<string | null>(null);
+  const [showModal, setShowModal]       = useState(false);
+  const [showThemePicker, setShowThemePicker] = useState(false);
+  const [showSolution, setShowSolution]       = useState(false);
+  const [editorTheme, setEditorTheme] = useState<EditorTheme>("vs-dark");
   const sessionId = useRef(newSessionId());
 
+  const limitReached = isGuest && usage.exercises >= GUEST_LIMITS.exercises;
+
+  // Persist theme to localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY) as EditorTheme | null;
+    if (saved && EDITOR_THEMES.some((t) => t.id === saved)) setEditorTheme(saved);
+  }, []);
+
+  function handleThemeChange(id: EditorTheme) {
+    setEditorTheme(id);
+    localStorage.setItem(THEME_STORAGE_KEY, id);
+    setShowThemePicker(false);
+  }
+
+  const currentThemeMeta = EDITOR_THEMES.find((t) => t.id === editorTheme)!;
+
   async function handleGenerate() {
+    if (!consumeGuestUsage("exercises")) {
+      setShowModal(true);
+      return;
+    }
     setGenerating(true);
     setApiError(null);
     setSubmitResult(null);
     setDebugResult(null);
+    setShowSolution(false);
     try {
+      const userId = user?.id ?? USER_ID;
       const res = await generateExercise({
-        topic,
-        user_id: USER_ID,
-        session_id: sessionId.current,
-        level: difficulty,
+        topic, user_id: userId, session_id: sessionId.current, level: difficulty,
       });
       setExercise(res.exercise);
       setCode(res.exercise.starter_code ?? "# Write your solution here\n");
@@ -60,10 +188,8 @@ export default function ExercisePage() {
     setApiError(null);
     try {
       const res = await submitCode({
-        user_id: USER_ID,
-        session_id: sessionId.current,
-        code,
-        question: exercise.description,
+        user_id: USER_ID, session_id: sessionId.current,
+        code, question: exercise.description,
       });
       setSubmitResult(res);
       setPanel("result");
@@ -80,11 +206,8 @@ export default function ExercisePage() {
     setApiError(null);
     try {
       const res = await debugCode({
-        code,
-        error: errorMsg,
-        user_id: USER_ID,
-        session_id: sessionId.current,
-        language: "python",
+        code, error: errorMsg, user_id: USER_ID,
+        session_id: sessionId.current, language: "python",
       });
       setDebugResult(res.analysis);
       setPanel("debug");
@@ -96,211 +219,412 @@ export default function ExercisePage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-65px)]">
-      {/* Toolbar */}
-      <div className="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-3 flex-wrap">
-        <label className="text-xs text-gray-400 uppercase tracking-wider">Topic</label>
-        <select
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          className="bg-gray-800 text-sm rounded-lg px-3 py-1.5 text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+    <div className="flex flex-col" style={{ height: "calc(100vh - 4rem)" }}>
+      {showModal && <UpgradeModal onClose={() => setShowModal(false)} />}
+
+      {/* ── Toolbar ─────────────────────────────────────────── */}
+      <motion.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        className="bg-surface-raised border-b border-surface-border px-4 py-2.5
+                   flex items-center gap-2 flex-wrap shrink-0"
+      >
+        {/* Topic select */}
+        <div className="relative">
+          <select
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            aria-label="Topic"
+            className="appearance-none bg-surface-base border border-surface-border rounded-lg
+                       pl-3 pr-7 py-1.5 text-xs text-ink-primary font-medium
+                       focus:outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/20
+                       hover:border-surface-border/80 transition-all duration-200 cursor-pointer"
+          >
+            {TOPICS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-disabled pointer-events-none" />
+        </div>
+
+        {/* Difficulty select */}
+        <div className="relative">
+          <select
+            value={difficulty}
+            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+            aria-label="Difficulty"
+            className="appearance-none bg-surface-base border border-surface-border rounded-lg
+                       pl-3 pr-7 py-1.5 text-xs text-ink-primary font-medium
+                       focus:outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/20
+                       hover:border-surface-border/80 transition-all duration-200 cursor-pointer"
+          >
+            {DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-disabled pointer-events-none" />
+        </div>
+
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={limitReached ? () => setShowModal(true) : handleGenerate}
+          loading={generating}
         >
-          {TOPICS.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+          {generating ? "Generating…" : limitReached ? "🔒 Limit reached" : (
+            <span className="flex items-center gap-1.5"><Zap size={12} />Generate</span>
+          )}
+        </Button>
 
-        <label className="text-xs text-gray-400 uppercase tracking-wider ml-2">Difficulty</label>
-        <select
-          value={difficulty}
-          onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-          className="bg-gray-800 text-sm rounded-lg px-3 py-1.5 text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        >
-          {DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
+        <GuestUsageBadge feature="exercises" />
 
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          className="ml-2 bg-gray-700 hover:bg-gray-600 text-sm px-4 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
-        >
-          {generating ? "Generating…" : "Generate Exercise"}
-        </button>
+        {/* ── Theme picker ── */}
+        <div className="relative ml-auto">
+          <button
+            onClick={() => setShowThemePicker((v) => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
+                       bg-surface-base border border-surface-border text-ink-tertiary
+                       hover:text-ink-secondary hover:border-brand/30 transition-all duration-200"
+            title="Editor theme"
+          >
+            <Palette size={12} />
+            <span className="hidden sm:inline">{currentThemeMeta.label}</span>
+            <span
+              className="w-2.5 h-2.5 rounded-full border border-surface-border shrink-0"
+              style={{ background: currentThemeMeta.bg }}
+            />
+          </button>
 
-        <div className="flex-1" />
+          <AnimatePresence>
+            {showThemePicker && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className="absolute right-0 top-full mt-1.5 z-30 bg-surface-raised border border-surface-border
+                           rounded-xl shadow-card-hover overflow-hidden min-w-[140px]"
+              >
+                {EDITOR_THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => handleThemeChange(t.id)}
+                    className={[
+                      "w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition-colors duration-150",
+                      editorTheme === t.id
+                        ? "bg-brand/10 text-brand-300"
+                        : "text-ink-secondary hover:bg-surface-hover hover:text-ink-primary",
+                    ].join(" ")}
+                  >
+                    <span
+                      className="w-3 h-3 rounded-full border border-surface-border shrink-0"
+                      style={{ background: t.bg }}
+                    />
+                    {t.label}
+                    {editorTheme === t.id && <span className="ml-auto text-brand-400">✓</span>}
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           onClick={handleSubmit}
-          disabled={submitting || !exercise}
-          className="bg-indigo-600 hover:bg-indigo-500 text-sm px-5 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
+          disabled={!exercise}
+          loading={submitting}
         >
-          {submitting ? "Submitting…" : "Submit"}
-        </button>
-      </div>
+          {submitting ? "Submitting…" : (
+            <span className="flex items-center gap-1.5"><CheckCircle2 size={12} />Submit</span>
+          )}
+        </Button>
+      </motion.div>
 
+      {/* ── Main split ──────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Monaco editor */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-hidden">
+
+        {/* Editor column */}
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
+          {/* Monaco */}
+          <div
+            className="flex-1 overflow-hidden transition-colors duration-300"
+            style={{ background: currentThemeMeta.bg }}
+          >
             <MonacoEditor
               height="100%"
               language="python"
-              theme="vs-dark"
+              theme={editorTheme}
               value={code}
               onChange={(v) => setCode(v ?? "")}
+              beforeMount={defineCustomThemes}
               options={{
                 fontSize: 14,
+                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
                 minimap: { enabled: false },
                 scrollBeyondLastLine: false,
                 lineNumbers: "on",
                 wordWrap: "on",
                 automaticLayout: true,
-                padding: { top: 16 },
+                padding: { top: 20 },
+                lineDecorationsWidth: 0,
+                glyphMargin: false,
+                renderLineHighlight: "line",
+                smoothScrolling: true,
+                cursorBlinking: "smooth",
+                cursorSmoothCaretAnimation: "on",
               }}
             />
           </div>
 
           {/* Debug bar */}
-          <div className="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center gap-3">
+          <div className="bg-surface-raised border-t border-surface-border px-4 py-2.5
+                          flex items-center gap-3 shrink-0">
             <input
               type="text"
               placeholder="Paste error message here to debug…"
               value={errorMsg}
               onChange={(e) => setErrorMsg(e.target.value)}
-              className="flex-1 bg-gray-800 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="input-base flex-1"
             />
-            <button
+            <Button
+              variant="warning"
+              size="sm"
               onClick={handleDebug}
-              disabled={debugging || !errorMsg.trim() || !code.trim()}
-              className="bg-amber-600 hover:bg-amber-500 text-sm px-4 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
+              disabled={!errorMsg.trim() || !code.trim()}
+              loading={debugging}
             >
-              {debugging ? "Analyzing…" : "Debug"}
-            </button>
+              {debugging ? "Analyzing…" : (
+                <span className="flex items-center gap-1.5"><Bug size={12} />Debug</span>
+              )}
+            </Button>
           </div>
         </div>
 
-        {/* Side panel */}
-        <aside className="w-96 shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden">
-          {/* Tabs */}
-          <div className="flex border-b border-gray-800">
+        {/* ── Side panel (hidden on mobile) ─────────────────── */}
+        <aside className="w-72 md:w-80 lg:w-96 shrink-0 bg-surface-raised border-l border-surface-border
+                          flex-col overflow-hidden hidden sm:flex">
+
+          {/* Tab bar */}
+          <div className="flex border-b border-surface-border shrink-0">
             {(["exercise", "debug", "result"] as SidePanel[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setPanel(tab)}
-                className={`flex-1 py-2 text-xs font-medium capitalize transition-colors
-                  ${panel === tab
-                    ? "text-indigo-400 border-b-2 border-indigo-500"
-                    : "text-gray-500 hover:text-gray-300"
-                  }`}
+                className={[
+                  "flex-1 py-2.5 text-xs font-medium capitalize transition-all duration-200",
+                  "flex items-center justify-center gap-1.5",
+                  panel === tab ? "tab-active" : "tab-inactive",
+                ].join(" ")}
               >
+                {PANEL_ICONS[tab]}
                 {tab}
               </button>
             ))}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
             {/* API error */}
-            {apiError && (
-              <div className="mb-4 bg-red-900/30 border border-red-700 rounded-lg p-3 text-red-300 text-xs">
-                {apiError}
-              </div>
-            )}
+            {apiError && <Alert variant="error">{apiError}</Alert>}
 
-            {/* Exercise tab */}
-            {panel === "exercise" && (
-              <>
-                {!exercise && !generating && (
-                  <p className="text-gray-600 text-sm text-center mt-12">
-                    Select a topic and click Generate Exercise to begin.
-                  </p>
-                )}
-                {generating && (
-                  <p className="text-gray-400 text-sm text-center mt-12">Generating exercise…</p>
-                )}
-                {exercise && !generating && (
-                  <div>
-                    <div className="flex items-start gap-2 mb-3">
-                      <h2 className="font-semibold text-base leading-snug flex-1">{exercise.title}</h2>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-900/40 text-indigo-300 shrink-0">
-                        {exercise.difficulty}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-300 leading-relaxed mb-4">{exercise.description}</p>
-                    {exercise.hints?.length > 0 && (
-                      <div>
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Hints</p>
-                        <ol className="space-y-1">
-                          {exercise.hints.map((h, i) => (
-                            <li key={i} className="text-xs text-gray-400">
-                              {i + 1}. {h}
-                            </li>
-                          ))}
-                        </ol>
+            {/* ── Exercise tab ── */}
+            <AnimatePresence mode="wait">
+              {panel === "exercise" && (
+                <motion.div
+                  key="exercise"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {!exercise && !generating && (
+                    <div className="text-center mt-16">
+                      <div
+                        className="w-12 h-12 rounded-2xl bg-brand/10 flex items-center justify-center mx-auto mb-4"
+                        style={{ boxShadow: "0 0 20px rgba(139,92,246,0.2)" }}
+                      >
+                        <Zap size={20} className="text-brand-300" />
                       </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Debug tab */}
-            {panel === "debug" && (
-              <>
-                {!debugResult && (
-                  <p className="text-gray-600 text-sm text-center mt-12">
-                    Paste an error in the debug bar below and click Debug.
-                  </p>
-                )}
-                {debugResult && (
-                  <div className="space-y-4 text-sm">
-                    <div>
-                      <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1">Root Cause</p>
-                      <p className="text-gray-300">{debugResult.root_cause}</p>
+                      <p className="text-sm text-ink-tertiary mb-1">No exercise yet</p>
+                      <p className="text-xs text-ink-disabled">Select a topic and click Generate</p>
                     </div>
-                    <div>
-                      <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1">Explanation</p>
-                      <p className="text-gray-300 leading-relaxed">{debugResult.explanation}</p>
+                  )}
+                  {generating && (
+                    <div className="mt-8 space-y-3">
+                      <div className="h-4 rounded-lg skeleton w-2/3" />
+                      <div className="h-3 rounded-lg skeleton w-full" />
+                      <div className="h-3 rounded-lg skeleton w-5/6" />
+                      <div className="h-3 rounded-lg skeleton w-full" />
+                      <div className="h-3 rounded-lg skeleton w-3/4" />
+                      <div className="h-3 rounded-lg skeleton w-full" />
                     </div>
-                    <div>
-                      <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1">Fix</p>
-                      <p className="text-gray-300 leading-relaxed">{debugResult.fix}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-1">Corrected Code</p>
-                      <pre className="bg-gray-800 rounded-lg p-3 text-xs text-gray-200 overflow-x-auto font-mono whitespace-pre-wrap">
-                        {debugResult.corrected_code}
-                      </pre>
-                    </div>
-                    {debugResult.key_concepts?.length > 0 && (
-                      <div>
-                        <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Review</p>
-                        <div className="flex flex-wrap gap-2">
-                          {debugResult.key_concepts.map((c) => (
-                            <span key={c} className="bg-gray-800 text-gray-300 text-xs px-2 py-1 rounded-full">{c}</span>
-                          ))}
+                  )}
+                  {exercise && !generating && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <div className="flex items-start gap-2 mb-4">
+                        <h2 className="font-semibold text-sm leading-snug flex-1 text-ink-primary">
+                          {exercise.title}
+                        </h2>
+                        <Badge variant={levelVariant(exercise.difficulty)} size="sm">
+                          {exercise.difficulty}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-ink-secondary leading-relaxed mb-5">
+                        {exercise.description}
+                      </p>
+                      {exercise.hints?.length > 0 && (
+                        <div className="mb-5">
+                          <p className="section-label text-ink-disabled mb-3">Hints</p>
+                          <ol className="space-y-2">
+                            {exercise.hints.map((h, i) => (
+                              <li key={i} className="text-xs text-ink-tertiary leading-relaxed
+                                                     bg-surface-base border border-surface-border
+                                                     rounded-xl px-3 py-2">
+                                <span className="text-brand-400 font-semibold mr-1.5">{i + 1}.</span>
+                                {h}
+                              </li>
+                            ))}
+                          </ol>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
+                      )}
+                      {/* ── Show Solution toggle ── */}
+                      {exercise.solution && (
+                        <div>
+                          <button
+                            onClick={() => setShowSolution((v) => !v)}
+                            className="flex items-center gap-2 text-xs font-medium text-ink-disabled
+                                       hover:text-ink-secondary transition-colors duration-150 mb-3"
+                          >
+                            {showSolution ? <EyeOff size={12} /> : <Eye size={12} />}
+                            {showSolution ? "Hide solution" : "Show solution"}
+                          </button>
+                          <AnimatePresence>
+                            {showSolution && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: "auto" }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ duration: 0.25 }}
+                                className="overflow-hidden"
+                              >
+                                <pre className="bg-surface-base border border-success/20 rounded-xl p-4
+                                                text-xs text-success-light font-mono overflow-x-auto
+                                                whitespace-pre-wrap leading-relaxed"
+                                  style={{ boxShadow: "0 0 16px rgba(52,211,153,0.06)" }}
+                                >
+                                  {exercise.solution}
+                                </pre>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </motion.div>
+              )}
 
-            {/* Result tab */}
-            {panel === "result" && (
-              <>
-                {!submitResult && (
-                  <p className="text-gray-600 text-sm text-center mt-12">
-                    Submit your solution to see the result.
-                  </p>
-                )}
-                {submitResult && (
-                  <div className="bg-green-900/30 border border-green-700 rounded-lg p-4">
-                    <p className="text-green-300 font-semibold text-sm mb-2">Submitted successfully</p>
-                    <p className="text-gray-400 text-xs">Status: {submitResult.status}</p>
-                    <p className="text-gray-400 text-xs break-all">Session: {submitResult.session_id}</p>
-                  </div>
-                )}
-              </>
-            )}
+              {/* ── Debug tab ── */}
+              {panel === "debug" && (
+                <motion.div
+                  key="debug"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {!debugResult && (
+                    <div className="text-center mt-16">
+                      <div
+                        className="w-12 h-12 rounded-2xl bg-warning/10 flex items-center justify-center mx-auto mb-4"
+                        style={{ boxShadow: "0 0 20px rgba(245,158,11,0.2)" }}
+                      >
+                        <Bug size={20} className="text-warning-light" />
+                      </div>
+                      <p className="text-sm text-ink-tertiary mb-1">No debug result yet</p>
+                      <p className="text-xs text-ink-disabled">Paste an error below and click Debug</p>
+                    </div>
+                  )}
+                  {debugResult && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="space-y-5 text-sm"
+                    >
+                      {[
+                        { label: "Root Cause",  content: debugResult.root_cause,  color: "text-danger-light" },
+                        { label: "Explanation", content: debugResult.explanation, color: "text-warning-light" },
+                        { label: "Fix",         content: debugResult.fix,         color: "text-success-light" },
+                      ].map(({ label, content, color }) => (
+                        <div key={label}>
+                          <p className={`section-label ${color} mb-2`}>{label}</p>
+                          <p className="text-ink-secondary leading-relaxed text-xs">{content}</p>
+                        </div>
+                      ))}
+                      <div>
+                        <p className="section-label text-brand-300 mb-2">Corrected Code</p>
+                        <pre className="bg-surface-base rounded-xl p-4 text-xs text-ink-secondary
+                                        font-mono overflow-x-auto whitespace-pre-wrap leading-relaxed
+                                        border border-surface-border">
+                          {debugResult.corrected_code}
+                        </pre>
+                      </div>
+                      {debugResult.key_concepts?.length > 0 && (
+                        <div>
+                          <p className="section-label text-ink-disabled mb-3">Review Concepts</p>
+                          <div className="flex flex-wrap gap-2">
+                            {debugResult.key_concepts.map((c) => (
+                              <Badge key={c} variant="neutral" size="sm">{c}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </motion.div>
+              )}
+
+              {/* ── Result tab ── */}
+              {panel === "result" && (
+                <motion.div
+                  key="result"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {!submitResult && (
+                    <div className="text-center mt-16">
+                      <div
+                        className="w-12 h-12 rounded-2xl bg-success/10 flex items-center justify-center mx-auto mb-4"
+                        style={{ boxShadow: "0 0 20px rgba(52,211,153,0.2)" }}
+                      >
+                        <CheckCircle2 size={20} className="text-success-light" />
+                      </div>
+                      <p className="text-sm text-ink-tertiary mb-1">Not submitted yet</p>
+                      <p className="text-xs text-ink-disabled">Click Submit to evaluate your solution</p>
+                    </div>
+                  )}
+                  {submitResult && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.97 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <Alert variant="success">
+                        <p className="font-semibold mb-1.5">Submitted successfully</p>
+                        <p className="text-xs opacity-80">Status: {submitResult.status}</p>
+                        <p className="text-xs opacity-60 break-all mt-1">Session: {submitResult.session_id}</p>
+                      </Alert>
+                    </motion.div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </aside>
       </div>
