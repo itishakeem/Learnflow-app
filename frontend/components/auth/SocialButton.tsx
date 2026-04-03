@@ -30,17 +30,37 @@ const PROVIDERS: Record<Provider, { label: string; Icon: () => React.ReactElemen
   github: { label: "GitHub", Icon: GitHubIcon },
 };
 
+// These hit the Next.js proxy → auth service → OAuth provider
+const OAUTH_URLS: Record<Provider, string> = {
+  google: "/api/svc/auth/auth/google",
+  github: "/api/svc/auth/auth/github",
+};
+
 interface SocialButtonProps {
   provider: Provider;
+  /** Override default OAuth redirect (e.g. for custom handling in tests) */
   onClick?: () => void;
 }
 
 export function SocialButton({ provider, onClick }: SocialButtonProps) {
   const { label, Icon } = PROVIDERS[provider];
+
+  function handleClick() {
+    if (onClick) {
+      onClick();
+      return;
+    }
+    // Full-page redirect — auth service will handle the OAuth dance and
+    // redirect back to /auth/callback?token=JWT once complete.
+    // Use replace() so this entry doesn't pollute the browser history,
+    // preventing the back button from jumping to a previous unrelated project.
+    window.location.replace(OAUTH_URLS[provider]);
+  }
+
   return (
     <motion.button
       type="button"
-      onClick={onClick}
+      onClick={handleClick}
       whileTap={{ scale: 0.97 }}
       transition={{ duration: 0.1 }}
       className="flex-1 flex items-center justify-center gap-2.5 py-2.5 px-4

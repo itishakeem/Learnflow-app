@@ -6,6 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowRight, Menu, X, LogOut, User } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import LevelBar from "@/components/gamification/LevelBar";
+import StreakBadge from "@/components/gamification/StreakBadge";
 
 type NavLink = { href: string; label: string; exact?: boolean };
 
@@ -19,6 +21,7 @@ const APP_LINKS: NavLink[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/concepts",  label: "Concepts" },
   { href: "/exercise",  label: "Exercise Editor" },
+  { href: "/profile",   label: "Profile" },
 ];
 
 function isActive(pathname: string, href: string, exact = false) {
@@ -73,7 +76,7 @@ export default function Nav() {
 
         {/* ── Desktop nav links ──────────────────────────────── */}
         <div className="hidden sm:flex items-center gap-0.5">
-          {links.map((link) => {
+          {links.filter((link) => link.href !== "/profile" || !!user).map((link) => {
             const active = isActive(pathname, link.href, link.exact);
             return (
               <Link
@@ -101,6 +104,17 @@ export default function Nav() {
 
         {/* ── Right side ─────────────────────────────────────── */}
         <div className="ml-auto flex items-center gap-2">
+          {/* XP + streak pill — always visible on app pages */}
+          {isAppPage && (
+            <div className="hidden sm:flex items-center gap-2">
+              {/* Streak badge */}
+              <StreakBadge size="sm" />
+              {/* Level/XP bar */}
+              <div className="w-40">
+                <LevelBar compact />
+              </div>
+            </div>
+          )}
           {user ? (
             /* ── Authenticated ─ */
             <div className="hidden sm:flex items-center gap-2">
@@ -214,7 +228,7 @@ export default function Nav() {
             className="fixed top-16 inset-x-0 z-40 bg-surface/95 backdrop-blur-xl
                        border-b border-surface-border px-4 py-4 flex flex-col gap-1 sm:hidden"
           >
-            {links.map((link) => {
+            {links.filter((link) => link.href !== "/profile" || !!user).map((link) => {
               const active = isActive(pathname, link.href, link.exact);
               return (
                 <Link

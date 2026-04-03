@@ -11,6 +11,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  avatarUrl?: string;
 }
 
 interface GuestUsage {
@@ -23,9 +24,11 @@ interface AuthState {
   isGuest: boolean;       // true when no user is logged in
   usage: GuestUsage;      // only relevant for guests
   loading: boolean;
+  isNewUser: boolean;     // true immediately after signup (one-time flag)
   // actions
-  login:  (user: User) => void;
+  login:  (user: User, newUser?: boolean) => void;
   logout: () => void;
+  clearNewUser: () => void;
   /** Call before a gated action. Returns true if allowed, false if limit hit. */
   consumeGuestUsage: (feature: "concepts" | "exercises") => boolean;
 }
@@ -38,21 +41,25 @@ export const GUEST_LIMITS: Record<keyof GuestUsage, number> = {
 };
 
 const STORAGE_KEY = "learnflow_user";
+const NEW_USER_KEY = "learnflow_new_user";
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser]     = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [usage, setUsage]   = useState<GuestUsage>({ concepts: 0, exercises: 0 });
+  const [user, setUser]         = useState<User | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [usage, setUsage]       = useState<GuestUsage>({ concepts: 0, exercises: 0 });
+  const [isNewUser, setIsNewUser] = useState(false);
 
   // Rehydrate from localStorage on mount
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) setUser(JSON.parse(raw) as User);
+      // Restore one-time new-user flag
+      if (localStorage.getItem(NEW_USER_KEY) === "1") setIsNewUser(true);
     } catch {
       /* ignore corrupt storage */
     } finally {
@@ -60,21 +67,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const login = useCallback((u: User) => {
+  const login = useCallback((u: User, newUser = false) => {
     setUser(u);
-    setUsage({ concepts: 0, exercises: 0 }); // reset usage on sign-in
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(u)); } catch { /* ignore */ }
+    setIsNewUser(newUser);
+    setUsage({ concepts: 0, exercises: 0 });
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(u));
+      if (newUser) {
+        localStorage.setItem(NEW_USER_KEY, "1");
+      } else {
+        localStorage.removeItem(NEW_USER_KEY);
+      }
+    } catch { /* ignore */ }
   }, []);
 
   const logout = useCallback(() => {
     setUser(null);
+    setIsNewUser(false);
     setUsage({ concepts: 0, exercises: 0 });
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(NEW_USER_KEY);
+      localStorage.removeItem("learnflow_token");
+      localStorage.removeItem("learnflow_gamification");
+    } catch { /* ignore */ }
+  }, []);
+
+  // Call once after the dashboard reads the flag so it doesn't show again on refresh
+  const clearNewUser = useCallback(() => {
+    setIsNewUser(false);
+    try { localStorage.removeItem(NEW_USER_KEY); } catch { /* ignore */ }
   }, []);
 
   const consumeGuestUsage = useCallback((feature: keyof GuestUsage): boolean => {
-    if (user) return true; // authenticated users are never limited
-    if (usage[feature] >= GUEST_LIMITS[feature]) return false; // limit hit
+    if (user) return true;
+    if (usage[feature] >= GUEST_LIMITS[feature]) return false;
     setUsage((prev) => ({ ...prev, [feature]: prev[feature] + 1 }));
     return true;
   }, [user, usage]);
@@ -85,8 +112,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isGuest: !user,
       usage,
       loading,
+      isNewUser,
       login,
       logout,
+      clearNewUser,
       consumeGuestUsage,
     }}>
       {children}

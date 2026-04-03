@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth-secrets
+  namespace: learnflow
+type: Opaque
+stringData:
+  # ── Required in production ───────────────────────────────────────────────────
+  # Generate: python -c "import secrets; print(secrets.token_hex(32))"
+  JWT_SECRET: "change-me-in-production"
+  SESSION_SECRET: "session-secret-change-in-production"
+  DATABASE_URL: ""                     # e.g. postgresql://user:pass@host/db
+  GOOGLE_CLIENT_ID: ""
+  GOOGLE_CLIENT_SECRET: ""
+  GITHUB_CLIENT_ID: ""
+  GITHUB_CLIENT_SECRET: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: learnflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      containers:
+      - name: auth
+        image: auth:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: FRONTEND_URL
+          value: "http://localhost:30300"          # NodePort URL in local K8s
+        - name: GOOGLE_REDIRECT_URI
+          value: "http://localhost:30306/auth/google/callback"
+        - name: GITHUB_REDIRECT_URI
+          value: "http://localhost:30306/auth/github/callback"
+        envFrom:
+        - secretRef:
+            name: auth-secrets
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: learnflow
+spec:
+  type: NodePort
+  selector:
+    app: auth
+  ports:
+  - port: 8000
+    targetPort: 8000
+    nodePort: 30306      # direct access for OAuth redirect URIs

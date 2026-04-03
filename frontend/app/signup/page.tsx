@@ -44,25 +44,76 @@ function StrengthBar({ password }: { password: string }) {
   );
 }
 
+function validatePassword(pw: string): string | null {
+  if (pw.length < 8)           return "Password must be at least 8 characters";
+  if (!/[a-zA-Z]/.test(pw))   return "Password must include at least one letter";
+  if (!/[0-9]/.test(pw))      return "Password must include at least one number";
+  return null;
+}
+
 export default function SignupPage() {
   const { login } = useAuth();
   const router    = useRouter();
 
-  const [name, setName]         = useState("");
-  const [email, setEmail]       = useState("");
-  const [password, setPassword] = useState("");
-  const [agreed, setAgreed]     = useState(false);
-  const [loading, setLoading]   = useState(false);
+  const [name, setName]             = useState("");
+  const [email, setEmail]           = useState("");
+  const [password, setPassword]     = useState("");
+  const [confirm, setConfirm]       = useState("");
+  const [agreed, setAgreed]         = useState(false);
+  const [loading, setLoading]       = useState(false);
+  const [errors, setErrors]         = useState<Record<string, string>>({});
 
-  const canSubmit = name.trim() && email.trim() && password.length >= 6 && agreed;
+  const canSubmit = name.trim() && email.trim() && password && confirm && agreed;
+
+  function validate(): boolean {
+    const errs: Record<string, string> = {};
+    if (!name.trim())  errs.name = "Name is required";
+    if (!email.trim()) errs.email = "Email is required";
+    const pwErr = validatePassword(password);
+    if (pwErr) errs.password = pwErr;
+    if (password !== confirm) errs.confirm = "Passwords do not match";
+    if (!agreed) errs.agreed = "You must accept the terms";
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!validate()) return;
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 800));
-    login({ id: `user-${Date.now()}`, name: name.trim(), email: email.trim() });
-    router.push("/dashboard");
+    try {
+      const res = await fetch("/api/svc/auth/auth/signup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name:     name.trim(),
+          email:    email.trim().toLowerCase(),
+          password,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          setErrors({ email: "An account with this email already exists" });
+        } else {
+          const raw = data.detail;
+          setErrors({ email: Array.isArray(raw) || typeof raw !== "string" ? "Sign up failed — please try again" : raw });
+        }
+        return;
+      }
+      try { localStorage.setItem("learnflow_token", data.token); } catch { /* ignore */ }
+      login({
+        id:        data.user.id,
+        name:      data.user.name,
+        email:     data.user.email,
+        avatarUrl: data.user.avatarUrl ?? undefined,
+      }, true); // isNewUser = true
+      router.push("/dashboard");
+    } catch {
+      setErrors({ email: "Network error — please try again" });
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -85,10 +136,11 @@ export default function SignupPage() {
               label="Name"
               placeholder="Your full name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: "" })); }}
               required
               disabled={loading}
               leftIcon={<User size={15} />}
+              error={errors.name}
             />
           </motion.div>
 
@@ -103,10 +155,11 @@ export default function SignupPage() {
               label="Email"
               placeholder="you@example.com"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); setErrors((p) => ({ ...p, email: "" })); }}
               required
               disabled={loading}
               leftIcon={<Mail size={15} />}
+              error={errors.email}
             />
           </motion.div>
 
@@ -118,20 +171,38 @@ export default function SignupPage() {
           >
             <PasswordInput
               label="Password"
-              placeholder="Min. 6 characters"
+              placeholder="Min. 8 characters, letters & numbers"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); setErrors((p) => ({ ...p, password: "" })); }}
               required
               disabled={loading}
+              error={errors.password}
             />
             <StrengthBar password={password} />
+          </motion.div>
+
+          {/* Confirm Password */}
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25, duration: 0.35, ease }}
+          >
+            <PasswordInput
+              label="Confirm Password"
+              placeholder="Re-enter your password"
+              value={confirm}
+              onChange={(e) => { setConfirm(e.target.value); setErrors((p) => ({ ...p, confirm: "" })); }}
+              required
+              disabled={loading}
+              error={errors.confirm}
+            />
           </motion.div>
 
           {/* Terms checkbox */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ delay: 0.25, duration: 0.35 }}
+            transition={{ delay: 0.3, duration: 0.35 }}
           >
             <label className="flex items-start gap-3 cursor-pointer group">
               <div className="relative mt-0.5 shrink-0">
@@ -139,7 +210,7 @@ export default function SignupPage() {
                   type="checkbox"
                   className="sr-only peer"
                   checked={agreed}
-                  onChange={(e) => setAgreed(e.target.checked)}
+                  onChange={(e) => { setAgreed(e.target.checked); setErrors((p) => ({ ...p, agreed: "" })); }}
                 />
                 <div className="w-4 h-4 rounded border border-surface-border bg-surface-base
                                 peer-checked:bg-brand peer-checked:border-brand
@@ -151,16 +222,21 @@ export default function SignupPage() {
                   )}
                 </div>
               </div>
-              <span className="text-xs text-ink-tertiary leading-relaxed group-hover:text-ink-secondary transition-colors">
-                I agree to the{" "}
-                <Link href="#" className="text-brand-300 hover:text-brand-200 font-medium transition-colors">
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link href="#" className="text-brand-300 hover:text-brand-200 font-medium transition-colors">
-                  Privacy Policy
-                </Link>
-              </span>
+              <div>
+                <span className="text-xs text-ink-tertiary leading-relaxed group-hover:text-ink-secondary transition-colors">
+                  I agree to the{" "}
+                  <Link href="#" className="text-brand-300 hover:text-brand-200 font-medium transition-colors">
+                    Terms of Service
+                  </Link>{" "}
+                  and{" "}
+                  <Link href="#" className="text-brand-300 hover:text-brand-200 font-medium transition-colors">
+                    Privacy Policy
+                  </Link>
+                </span>
+                {errors.agreed && (
+                  <p className="text-xs text-danger-light mt-1">{errors.agreed}</p>
+                )}
+              </div>
             </label>
           </motion.div>
 

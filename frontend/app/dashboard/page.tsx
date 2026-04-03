@@ -5,10 +5,16 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { BookOpen, CheckCircle2, Clock, ArrowRight, Zap, Sparkles } from "lucide-react";
 import { getProgress, type ProgressResponse } from "@/lib/api";
+import { apiError } from "@/lib/errors";
 import { useAuth } from "@/lib/auth";
 import { LockedOverlay, UpgradeModal } from "@/components/auth/GuestGate";
 import Badge from "@/components/ui/Badge";
 import Alert from "@/components/ui/Alert";
+import { useGamification } from "@/lib/gamification";
+import LevelBar from "@/components/gamification/LevelBar";
+import StreakBadge from "@/components/gamification/StreakBadge";
+import BubbleBackground from "@/components/dashboard/BubbleBackground";
+import DailyGoalsCard from "@/components/gamification/DailyGoalsCard";
 
 const USER_ID = "demo-user";
 
@@ -83,17 +89,32 @@ function useCountUp(target: number, duration = 1200): number {
   return count;
 }
 
+function getHookMessage(streak: number, xp: number, xpToNext: number, level: number): string {
+  if (xpToNext <= 20) return `You're only ${xpToNext} XP away from Level ${level + 1}! 🚀`;
+  if (streak >= 7) return `${streak}-day streak! You're absolutely on fire 🔥`;
+  if (streak >= 3) return `Don't break your ${streak}-day streak! Keep going 🔥`;
+  if (streak === 0 || streak === 1) return "Start a streak today — come back tomorrow to build momentum!";
+  if (xp === 0) return "Complete your first exercise to earn XP and start your journey! ⚡";
+  return "Continue where you left off and climb the leaderboard! 💪";
+}
+
 export default function DashboardPage() {
-  const { isGuest, user } = useAuth();
+  const { isGuest, user, isNewUser, clearNewUser } = useAuth();
+  const { state: gamState, levelInfo } = useGamification();
 
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
 
+  // Snapshot isNewUser on first mount — clear flag after display so refreshes show "Welcome back"
+  const isNewUserRef = useRef(isNewUser);
+  useEffect(() => {
+    if (isNewUserRef.current) clearNewUser();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (isGuest) {
-      // Show demo data for guests without hitting the API
       setProgress(DEMO_PROGRESS);
       setLoading(false);
       return;
@@ -101,7 +122,7 @@ export default function DashboardPage() {
     const userId = user?.id ?? USER_ID;
     getProgress(userId)
       .then(setProgress)
-      .catch((e: Error) => setError(e.message))
+      .catch((e: unknown) => { const msg = apiError(e); if (msg) setError(msg); })
       .finally(() => setLoading(false));
   }, [isGuest, user]);
 
@@ -110,19 +131,11 @@ export default function DashboardPage() {
   const exercisesCount = useCountUp(progress?.summary.exercises_completed ?? 0);
 
   return (
-    // ── Page background wrapper with radial glow orb ──────────────────────
     <div className="relative">
-      {/* Decorative background glow orb */}
-      <div
-        aria-hidden="true"
-        className="absolute top-[-100px] right-[-100px] w-[500px] h-[500px] rounded-full pointer-events-none"
-        style={{
-          background: "radial-gradient(circle, rgba(139,92,246,0.05) 0%, transparent 70%)",
-          filter: "blur(120px)",
-        }}
-      />
+      {/* Luxury animated bubble background — dashboard only */}
+      <BubbleBackground />
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 relative">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 relative z-10">
         {showModal && <UpgradeModal onClose={() => setShowModal(false)} />}
 
         {/* ── Guest demo banner ────────────────────────────────── */}
@@ -157,7 +170,16 @@ export default function DashboardPage() {
         >
           <div>
             <p className="section-label text-brand-300 mb-2">Overview</p>
-            <h1 className="text-3xl font-bold text-ink-primary tracking-tight">Dashboard</h1>
+            {user ? (
+              <h1 className="text-3xl font-bold text-ink-primary tracking-tight">
+                {isNewUserRef.current
+                  ? <>Welcome, {user.name.split(" ")[0]} 👋</>
+                  : <>Welcome back, {user.name.split(" ")[0]} 👋</>
+                }
+              </h1>
+            ) : (
+              <h1 className="text-3xl font-bold text-ink-primary tracking-tight">Dashboard</h1>
+            )}
             <p className="text-sm text-ink-tertiary mt-1.5">Track your Python learning journey</p>
           </div>
           <div className="flex gap-3 shrink-0">
@@ -178,6 +200,58 @@ export default function DashboardPage() {
               Start Exercise
               <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
             </Link>
+          </div>
+        </motion.div>
+
+        {/* ── Hook / motivational message ───────────────────────── */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.05, ease }}
+          className="mb-6"
+        >
+          <div
+            className="flex items-center gap-3 px-4 py-3 rounded-xl"
+            style={{
+              background: "rgba(139,92,246,0.07)",
+              border: "1px solid rgba(139,92,246,0.18)",
+            }}
+          >
+            <Sparkles size={14} className="text-brand-300 shrink-0" />
+            <p className="text-sm text-brand-300 font-medium">
+              {getHookMessage(gamState.streak, gamState.totalXP, levelInfo.xpToNext, levelInfo.level)}
+            </p>
+          </div>
+        </motion.div>
+
+        {/* ── Gamification row ─────────────────────────────────── */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.1, ease }}
+          className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8"
+        >
+          {/* Level progress */}
+          <div
+            className="rounded-2xl p-5 col-span-1"
+            style={{
+              background: "linear-gradient(135deg, rgba(15,15,24,0.95) 0%, rgba(10,10,18,0.95) 100%)",
+              border: "1px solid rgba(139,92,246,0.2)",
+              boxShadow: "0 0 24px rgba(139,92,246,0.08)",
+            }}
+          >
+            <p className="text-2xs text-ink-disabled uppercase tracking-widest font-medium mb-3">Your Level</p>
+            <LevelBar />
+          </div>
+
+          {/* Streak */}
+          <div className="col-span-1">
+            <StreakBadge size="lg" />
+          </div>
+
+          {/* Daily Goals */}
+          <div className="col-span-1">
+            <DailyGoalsCard />
           </div>
         </motion.div>
 

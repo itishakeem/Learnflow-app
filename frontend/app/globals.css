@@ -208,3 +208,27 @@
     clip: rect(0,0,0,0); white-space: nowrap; border: 0;
   }
 }
+
+/* ─── Keyframe Animations ────────────────────────────────── */
+
+/* Blinking cursor for streaming text */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* Floating bubble rise for dashboard background */
+@keyframes bubble-rise {
+  0%   { transform: translateY(0) scale(1);    opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateY(-110vh) scale(1.15); opacity: 0; }
+}
+
+/* Gentle drift (horizontal wobble during rise) */
+@keyframes bubble-drift {
+  0%   { margin-left: 0; }
+  33%  { margin-left: 24px; }
+  66%  { margin-left: -18px; }
+  100% { margin-left: 8px; }
+}

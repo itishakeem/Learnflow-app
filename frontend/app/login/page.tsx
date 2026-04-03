@@ -23,15 +23,51 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
   const [loading, setLoading]   = useState(false);
+  const [errors, setErrors]     = useState<Record<string, string>>({});
+
+  function validate(): boolean {
+    const errs: Record<string, string> = {};
+    if (!email.trim())    errs.email    = "Email is required";
+    if (!password.trim()) errs.password = "Password is required";
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!validate()) return;
     setLoading(true);
-    // UI-only mock login — derive name from email local-part
-    await new Promise((r) => setTimeout(r, 800));
-    const name = email.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-    login({ id: `user-${Date.now()}`, name, email });
-    router.push("/dashboard");
+    try {
+      const res = await fetch("/api/svc/auth/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const raw = data.detail;
+        const msg = Array.isArray(raw)
+          ? "Invalid email or password"
+          : typeof raw === "string"
+          ? raw
+          : "Invalid email or password";
+        setErrors({ password: msg });
+        return;
+      }
+      // Persist JWT for API calls
+      try { localStorage.setItem("learnflow_token", data.token); } catch { /* ignore */ }
+      login({
+        id:        data.user.id,
+        name:      data.user.name,
+        email:     data.user.email,
+        avatarUrl: data.user.avatarUrl ?? undefined,
+      });
+      router.push("/dashboard");
+    } catch {
+      setErrors({ password: "Network error — please try again" });
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -55,10 +91,11 @@ export default function LoginPage() {
               label="Email"
               placeholder="you@example.com"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); setErrors((p) => ({ ...p, email: "" })); }}
               required
               disabled={loading}
               leftIcon={<Mail size={15} />}
+              error={errors.email}
             />
           </motion.div>
 
@@ -72,9 +109,10 @@ export default function LoginPage() {
               label="Password"
               placeholder="••••••••"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); setErrors((p) => ({ ...p, password: "" })); }}
               required
               disabled={loading}
+              error={errors.password}
             />
           </motion.div>
 

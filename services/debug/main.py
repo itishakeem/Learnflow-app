@@ -1,6 +1,8 @@
+import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import google.generativeai as genai
@@ -8,7 +10,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 logger = logging.getLogger("debug")
 
 app = FastAPI(title="debug-agent", version="1.0.0")
@@ -17,10 +22,10 @@ PUBSUB_NAME    = os.getenv("PUBSUB_NAME", "kafka-pubsub")
 TOPIC_NAME     = os.getenv("TOPIC_NAME", "code.debug.analysis")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "15"))
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# ── Model singleton — lower temperature for deterministic debug output ─────────
 _model = genai.GenerativeModel(
     model_name=GEMINI_MODEL,
     generation_config=genai.types.GenerationConfig(
@@ -85,16 +90,24 @@ def health():
 
 @app.post("/debug")
 async def debug(request: DebugRequest):
+    t0 = time.perf_counter()
     try:
-        analysis_data = await run_in_threadpool(
-            _analyze_code, request.language, request.code, request.error
+        analysis_data = await asyncio.wait_for(
+            run_in_threadpool(_analyze_code, request.language, request.code, request.error),
+            timeout=STREAM_TIMEOUT,
         )
+    except asyncio.TimeoutError:
+        logger.warning("debug analyze timed out language=%r", request.language)
+        raise HTTPException(status_code=504, detail="Debug analysis timed out — please try again")
     except json.JSONDecodeError as exc:
         logger.error("Failed to parse analysis JSON: %s", exc)
         raise HTTPException(status_code=502, detail="Invalid analysis format from model") from exc
     except Exception as exc:
         logger.error("Gemini request failed: %s", exc)
         raise HTTPException(status_code=502, detail="Debug analysis failed") from exc
+
+    elapsed = time.perf_counter() - t0
+    logger.info("debug analyze language=%r elapsed=%.2fs", request.language, elapsed)
 
     event_payload = {
         "event_type": "code.debug.analysis",
@@ -104,7 +117,7 @@ async def debug(request: DebugRequest):
         "analysis":   analysis_data,
         "timestamp":  datetime.now(timezone.utc).isoformat(),
     }
-    await run_in_threadpool(_publish_event, event_payload)
+    asyncio.create_task(run_in_threadpool(_publish_event, event_payload))
 
     return {
         "status":     "ok",

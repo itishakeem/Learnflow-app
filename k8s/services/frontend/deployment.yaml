@@ -5,6 +5,7 @@ metadata:
   namespace: learnflow
 data:
   # Service names must match the K8s Service names in each deployment
+  AUTH_URL:     "http://auth:8000"
   TRIAGE_URL:   "http://triage:8000"
   CONCEPTS_URL: "http://concepts-agent:8000"
   EXERCISE_URL: "http://exercise-agent:8000"

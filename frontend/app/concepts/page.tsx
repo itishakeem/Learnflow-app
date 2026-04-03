@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Brain, Send, RotateCcw, Copy, Check } from "lucide-react";
-import { explainConcept, type ConceptResponse } from "@/lib/api";
+import { explainConceptStream, type ConceptResponse } from "@/lib/api";
+import { apiError } from "@/lib/errors";
 import { useAuth, GUEST_LIMITS } from "@/lib/auth";
 import { GuestUsageBadge, UpgradeModal } from "@/components/auth/GuestGate";
 import Button from "@/components/ui/Button";
@@ -11,6 +12,7 @@ import Input from "@/components/ui/Input";
 import Badge from "@/components/ui/Badge";
 import Alert from "@/components/ui/Alert";
 import LoadingSkeleton from "@/components/ui/LoadingSkeleton";
+import { useGamification, XP_RULES } from "@/lib/gamification";
 
 const LEVELS = ["beginner", "intermediate", "advanced"] as const;
 type Level = (typeof LEVELS)[number];
@@ -29,6 +31,7 @@ const ease = [0.0, 0.0, 0.2, 1] as const;
 
 export default function ConceptsPage() {
   const { isGuest, user, consumeGuestUsage, usage } = useAuth();
+  const { awardXP } = useGamification();
 
   const [concept, setConcept] = useState("");
   const [level, setLevel]     = useState<Level>("beginner");
@@ -45,7 +48,6 @@ export default function ConceptsPage() {
     const trimmed = concept.trim();
     if (!trimmed) return;
 
-    // Check / consume guest usage slot
     if (!consumeGuestUsage("concepts")) {
       setShowModal(true);
       return;
@@ -53,22 +55,37 @@ export default function ConceptsPage() {
 
     setLoading(true);
     setError(null);
-    setResult(null);
-    try {
-      const userId = user?.id ?? USER_ID;
-      const res = await explainConcept({
-        concept: trimmed,
-        user_id: userId,
-        session_id: newSessionId(),
-        level,
-        context: context.trim() || undefined,
-      });
-      setResult(res);
-    } catch (e: unknown) {
-      if (e instanceof Error) setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    // Show skeleton immediately with empty result so the card appears right away
+    setResult({ status: "streaming", service: "concepts-agent", session_id: "", concept: trimmed, explanation: "" });
+
+    const userId = user?.id ?? USER_ID;
+    let xpAwarded = false;
+
+    await explainConceptStream(
+      { concept: trimmed, user_id: userId, session_id: newSessionId(), level, context: context.trim() || undefined },
+      // onChunk — append each token as it arrives
+      (chunk) => {
+        setResult((prev) => prev
+          ? { ...prev, explanation: prev.explanation + chunk }
+          : null
+        );
+      },
+      // onDone — finalise metadata
+      (meta) => {
+        setResult((prev) => prev ? { ...prev, status: "ok", session_id: meta.session_id } : null);
+        setLoading(false);
+        if (!xpAwarded) {
+          xpAwarded = true;
+          awardXP(XP_RULES.conceptExplained, "Concept learned", "concept");
+        }
+      },
+      // onError
+      (msg) => {
+        const errMsg = apiError(new Error(msg)); if (errMsg) setError(errMsg);
+        setResult(null);
+        setLoading(false);
+      },
+    );
   }
 
   function handleReset() {
@@ -232,9 +249,9 @@ export default function ConceptsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Skeleton ────────────────────────────────── */}
+      {/* ── Skeleton — shown only while loading AND no text yet ── */}
       <AnimatePresence>
-        {loading && (
+        {loading && !result?.explanation && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -246,9 +263,9 @@ export default function ConceptsPage() {
         )}
       </AnimatePresence>
 
-      {/* ── Result ──────────────────────────────────── */}
+      {/* ── Result (visible while streaming AND after) ─────────── */}
       <AnimatePresence>
-        {result && !loading && (
+        {result && result.explanation && (
           <motion.article
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -308,14 +325,21 @@ export default function ConceptsPage() {
                 }
               </button>
 
-              {/* Explanation text with reveal animation */}
+              {/* Explanation text — streams in token by token */}
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
+                transition={{ duration: 0.3 }}
                 className="prose-dark text-ink-secondary leading-relaxed text-sm whitespace-pre-wrap pr-8"
               >
                 {result.explanation}
+                {/* Blinking cursor while streaming */}
+                {loading && (
+                  <span
+                    className="inline-block w-0.5 h-4 ml-0.5 bg-brand-300 align-middle"
+                    style={{ animation: "blink 0.8s step-end infinite" }}
+                  />
+                )}
               </motion.div>
             </div>
           </motion.article>

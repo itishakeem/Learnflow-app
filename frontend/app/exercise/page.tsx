@@ -3,17 +3,20 @@
 import { useRef, useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, Bug, CheckCircle2, ChevronDown, Palette, Eye, EyeOff } from "lucide-react";
+import { Zap, Bug, CheckCircle2, ChevronDown, Palette, Eye, EyeOff, Play } from "lucide-react";
 import type { Monaco } from "@monaco-editor/react";
 import {
-  generateExercise, submitCode, debugCode,
-  type ExerciseData, type DebugAnalysis,
+  generateExercise, submitCode, debugCode, runCode,
+  type ExerciseData, type DebugAnalysis, type RunResponse,
 } from "@/lib/api";
+import { apiError as formatApiError } from "@/lib/errors";
 import { useAuth, GUEST_LIMITS } from "@/lib/auth";
 import { GuestUsageBadge, UpgradeModal } from "@/components/auth/GuestGate";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import Alert from "@/components/ui/Alert";
+import { useGamification, XP_RULES } from "@/lib/gamification";
+import ConfettiReward from "@/components/gamification/ConfettiReward";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -103,7 +106,7 @@ const TOPICS = ["variables", "functions", "loops", "classes", "decorators", "asy
 const USER_ID = "demo-user";
 function newSessionId() { return `session-${Date.now()}`; }
 
-type SidePanel = "exercise" | "debug" | "result";
+type SidePanel = "exercise" | "debug" | "result" | "output";
 
 const levelVariant = (d: string): "success" | "warning" | "danger" => {
   if (d === "beginner") return "success";
@@ -115,12 +118,14 @@ const PANEL_ICONS: Record<SidePanel, React.ReactNode> = {
   exercise: <Zap size={13} />,
   debug:    <Bug size={13} />,
   result:   <CheckCircle2 size={13} />,
+  output:   <Play size={13} />,
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function ExercisePage() {
   const { isGuest, user, consumeGuestUsage, usage } = useAuth();
+  const { awardXP } = useGamification();
 
   const [topic, setTopic]           = useState(TOPICS[0]);
   const [difficulty, setDifficulty] = useState<Difficulty>("beginner");
@@ -134,10 +139,13 @@ export default function ExercisePage() {
   const [submitResult, setSubmitResult] = useState<{ status: string; session_id: string } | null>(null);
   const [debugResult, setDebugResult]   = useState<DebugAnalysis | null>(null);
   const [apiError, setApiError]         = useState<string | null>(null);
+  const [runResult, setRunResult]       = useState<RunResponse | null>(null);
+  const [running, setRunning]           = useState(false);
   const [showModal, setShowModal]       = useState(false);
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [showSolution, setShowSolution]       = useState(false);
   const [editorTheme, setEditorTheme] = useState<EditorTheme>("vs-dark");
+  const [showConfetti, setShowConfetti] = useState(false);
   const sessionId = useRef(newSessionId());
 
   const limitReached = isGuest && usage.exercises >= GUEST_LIMITS.exercises;
@@ -175,8 +183,9 @@ export default function ExercisePage() {
       setCode(res.exercise.starter_code ?? "# Write your solution here\n");
       sessionId.current = newSessionId();
       setPanel("exercise");
+      awardXP(XP_RULES.exerciseGenerated, "Exercise generated", "exercise");
     } catch (e: unknown) {
-      if (e instanceof Error) setApiError(e.message);
+      const msg = formatApiError(e); if (msg) setApiError(msg);
     } finally {
       setGenerating(false);
     }
@@ -193,8 +202,10 @@ export default function ExercisePage() {
       });
       setSubmitResult(res);
       setPanel("result");
+      awardXP(XP_RULES.exerciseSubmitted, "Exercise submitted", "exercise");
+      setShowConfetti(true);
     } catch (e: unknown) {
-      if (e instanceof Error) setApiError(e.message);
+      const msg = formatApiError(e); if (msg) setApiError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -212,15 +223,32 @@ export default function ExercisePage() {
       setDebugResult(res.analysis);
       setPanel("debug");
     } catch (e: unknown) {
-      if (e instanceof Error) setApiError(e.message);
+      const msg = formatApiError(e); if (msg) setApiError(msg);
     } finally {
       setDebugging(false);
+    }
+  }
+
+  async function handleRun() {
+    if (!code.trim()) return;
+    setRunning(true);
+    setApiError(null);
+    setRunResult(null);
+    setPanel("output");
+    try {
+      const res = await runCode(code);
+      setRunResult(res);
+    } catch (e: unknown) {
+      const msg = formatApiError(e); if (msg) setApiError(msg);
+    } finally {
+      setRunning(false);
     }
   }
 
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 4rem)" }}>
       {showModal && <UpgradeModal onClose={() => setShowModal(false)} />}
+      <ConfettiReward active={showConfetti} onDone={() => setShowConfetti(false)} />
 
       {/* ── Toolbar ─────────────────────────────────────────── */}
       <motion.div
@@ -327,6 +355,18 @@ export default function ExercisePage() {
         </div>
 
         <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleRun}
+          disabled={!code.trim()}
+          loading={running}
+        >
+          {running ? "Running…" : (
+            <span className="flex items-center gap-1.5"><Play size={12} />Run</span>
+          )}
+        </Button>
+
+        <Button
           variant="primary"
           size="sm"
           onClick={handleSubmit}
@@ -406,7 +446,7 @@ export default function ExercisePage() {
 
           {/* Tab bar */}
           <div className="flex border-b border-surface-border shrink-0">
-            {(["exercise", "debug", "result"] as SidePanel[]).map((tab) => (
+            {(["exercise", "output", "debug", "result"] as SidePanel[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setPanel(tab)}
@@ -614,12 +654,127 @@ export default function ExercisePage() {
                       initial={{ opacity: 0, scale: 0.97 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ duration: 0.3 }}
+                      className="space-y-4"
                     >
+                      {/* XP earned card */}
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.15 }}
+                        className="rounded-2xl p-5 text-center"
+                        style={{
+                          background: "linear-gradient(135deg, rgba(139,92,246,0.15) 0%, rgba(34,211,238,0.08) 100%)",
+                          border: "1px solid rgba(139,92,246,0.3)",
+                          boxShadow: "0 0 32px rgba(139,92,246,0.12)",
+                        }}
+                      >
+                        <div className="text-3xl mb-2">✨</div>
+                        <p className="text-2xl font-extrabold text-brand-300">+{XP_RULES.exerciseSubmitted} XP</p>
+                        <p className="text-xs text-ink-tertiary mt-1">Exercise completed!</p>
+                      </motion.div>
+
                       <Alert variant="success">
                         <p className="font-semibold mb-1.5">Submitted successfully</p>
                         <p className="text-xs opacity-80">Status: {submitResult.status}</p>
                         <p className="text-xs opacity-60 break-all mt-1">Session: {submitResult.session_id}</p>
                       </Alert>
+                    </motion.div>
+                  )}
+                </motion.div>
+              )}
+
+              {/* ── Output tab ── */}
+              {panel === "output" && (
+                <motion.div
+                  key="output"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {running && (
+                    <div className="mt-8 space-y-3">
+                      <div className="h-3 rounded-lg skeleton w-1/2" />
+                      <div className="h-3 rounded-lg skeleton w-3/4" />
+                      <div className="h-3 rounded-lg skeleton w-2/3" />
+                    </div>
+                  )}
+                  {!running && !runResult && (
+                    <div className="text-center mt-16">
+                      <div
+                        className="w-12 h-12 rounded-2xl bg-success/10 flex items-center justify-center mx-auto mb-4"
+                        style={{ boxShadow: "0 0 20px rgba(52,211,153,0.15)" }}
+                      >
+                        <Play size={20} className="text-success-light" />
+                      </div>
+                      <p className="text-sm text-ink-tertiary mb-1">No output yet</p>
+                      <p className="text-xs text-ink-disabled">Click Run to execute your code</p>
+                    </div>
+                  )}
+                  {!running && runResult && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.25 }}
+                      className="space-y-4"
+                    >
+                      {/* Status badge */}
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ background: runResult.exit_code === 0 ? "#34d399" : "#f87171" }}
+                        />
+                        <span className="text-xs font-semibold"
+                          style={{ color: runResult.exit_code === 0 ? "#34d399" : "#f87171" }}
+                        >
+                          {runResult.timed_out
+                            ? "Timed out"
+                            : runResult.exit_code === 0
+                            ? "Exited successfully"
+                            : `Exited with code ${runResult.exit_code}`}
+                        </span>
+                      </div>
+
+                      {/* stdout */}
+                      {runResult.stdout && (
+                        <div>
+                          <p className="section-label text-ink-disabled mb-2">Output</p>
+                          <pre
+                            className="rounded-xl p-4 text-xs font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap break-words"
+                            style={{
+                              background: "rgba(15,15,24,0.95)",
+                              border: "1px solid rgba(52,211,153,0.2)",
+                              color: "#d1fae5",
+                            }}
+                          >
+                            {runResult.stdout}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* stderr */}
+                      {runResult.stderr && (
+                        <div>
+                          <p className="section-label text-danger-light mb-2">Errors</p>
+                          <pre
+                            className="rounded-xl p-4 text-xs font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap break-words"
+                            style={{
+                              background: "rgba(239,68,68,0.05)",
+                              border: "1px solid rgba(239,68,68,0.2)",
+                              color: "#fca5a5",
+                            }}
+                          >
+                            {runResult.stderr}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Empty output */}
+                      {!runResult.stdout && !runResult.stderr && (
+                        <p className="text-xs text-ink-disabled italic">
+                          (no output)
+                        </p>
+                      )}
                     </motion.div>
                   )}
                 </motion.div>
