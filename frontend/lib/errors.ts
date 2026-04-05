@@ -1,14 +1,23 @@
 /**
  * Centralized API error handler.
+ * - Never exposes raw server details or stack traces to the UI.
+ * - Logs to console only in development.
  *
  * Usage:
  *   import { apiError } from "@/lib/errors";
  *   catch (e) { setError(apiError(e)); }
  */
 
+const isDev = process.env.NODE_ENV === "development";
+
+function devLog(...args: unknown[]): void {
+  if (isDev) console.error(...args);
+}
+
 export function apiError(err: unknown): string | null {
   // Network / fetch failure (no response at all)
   if (err instanceof TypeError && err.message.toLowerCase().includes("fetch")) {
+    devLog("[LearnFlow] Network error:", err.message);
     return "Unable to connect. Check your internet connection and try again.";
   }
 
@@ -17,41 +26,49 @@ export function apiError(err: unknown): string | null {
   }
 
   if (err instanceof Error) {
-    // Errors thrown by our json() helper: "HTTP 404: ..."
     const match = err.message.match(/^HTTP (\d+):/);
     if (match) {
       const status = parseInt(match[1], 10);
       const detail = err.message.replace(/^HTTP \d+:\s*/, "");
       return friendlyMessage(status, detail);
     }
-    console.error("[LearnFlow]", err.message);
+    devLog("[LearnFlow] Unexpected error:", err.message);
     return "Something went wrong. Please try again.";
   }
 
-  console.error("[LearnFlow] Unknown error:", err);
+  devLog("[LearnFlow] Unknown error:", err);
   return "An unexpected error occurred. Please try again.";
 }
 
 function friendlyMessage(status: number, detail: string): string | null {
   switch (status) {
-    case 400: return "Invalid request. Please check your input and try again.";
-    case 401: return "Your session has expired. Please sign in again.";
-    case 403: return "You don't have permission to perform this action.";
-    case 404: return "Progress data not found. Start learning to track your progress!";
-    case 409: return "An account with this email already exists.";
+    case 400:
+      devLog("[LearnFlow] Bad request (400):", detail);
+      return "Invalid request. Please check your input and try again.";
+    case 401:
+      devLog("[LearnFlow] Unauthorized (401):", detail);
+      return "Your session has expired. Please sign in again.";
+    case 403:
+      devLog("[LearnFlow] Forbidden (403):", detail);
+      return "You don't have permission to perform this action.";
+    case 404:
+      devLog("[LearnFlow] Not found (404):", detail);
+      return null; // Expected for new users — no error shown
+    case 409:
+      return "An account with this email already exists.";
     case 422:
-      // Validation errors are caused by bad input — silently log, never surface to UI
-      console.error("[LearnFlow] Validation error (422):", detail);
-      return null;
-    case 429: return "Too many requests. Please wait a moment and try again.";
+      devLog("[LearnFlow] Validation error (422):", detail);
+      return null; // Bad input — suppress from UI
+    case 429:
+      return "Too many requests. Please wait a moment and try again.";
     case 500:
     case 502:
     case 503:
     case 504:
-      console.error(`[LearnFlow] Server error ${status}:`, detail);
+      devLog(`[LearnFlow] Server error ${status}:`, detail);
       return "Something went wrong on our end. Please try again shortly.";
     default:
-      console.error(`[LearnFlow] API error ${status}:`, detail);
+      devLog(`[LearnFlow] API error ${status}:`, detail);
       return "Something went wrong. Please try again.";
   }
 }

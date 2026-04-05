@@ -2,11 +2,13 @@
 
 import { useRef, useState, useEffect } from "react";
 import dynamic from "next/dynamic";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, Bug, CheckCircle2, ChevronDown, Palette, Eye, EyeOff, Play } from "lucide-react";
+import { Zap, Bug, CheckCircle2, BookOpen, Palette, Eye, EyeOff, Play, ChevronDown } from "lucide-react";
 import type { Monaco } from "@monaco-editor/react";
 import {
-  generateExercise, submitCode, debugCode, runCode,
+  generateExercise, explainConceptStream, submitCode, debugCode, runCode,
   type ExerciseData, type DebugAnalysis, type RunResponse,
 } from "@/lib/api";
 import { apiError as formatApiError } from "@/lib/errors";
@@ -101,12 +103,10 @@ const THEME_STORAGE_KEY = "learnflow_editor_theme";
 const DIFFICULTIES = ["beginner", "intermediate", "advanced"] as const;
 type Difficulty = (typeof DIFFICULTIES)[number];
 
-const TOPICS = ["variables", "functions", "loops", "classes", "decorators", "async/await"];
-
 const USER_ID = "demo-user";
 function newSessionId() { return `session-${Date.now()}`; }
 
-type SidePanel = "exercise" | "debug" | "result" | "output";
+type SidePanel = "exercise" | "concept" | "debug" | "result" | "output";
 
 const levelVariant = (d: string): "success" | "warning" | "danger" => {
   if (d === "beginner") return "success";
@@ -116,10 +116,84 @@ const levelVariant = (d: string): "success" | "warning" | "danger" => {
 
 const PANEL_ICONS: Record<SidePanel, React.ReactNode> = {
   exercise: <Zap size={13} />,
+  concept:  <BookOpen size={13} />,
   debug:    <Bug size={13} />,
   result:   <CheckCircle2 size={13} />,
   output:   <Play size={13} />,
 };
+
+// ── Markdown renderer ─────────────────────────────────────────────────────────
+
+const CODE_BLOCK_CLS =
+  "bg-surface-base border border-surface-border rounded-xl p-4 text-xs font-mono " +
+  "text-ink-secondary overflow-x-auto whitespace-pre-wrap leading-relaxed my-3";
+const CODE_BLOCK_STYLE = { background: "rgba(15,15,24,0.95)", borderColor: "rgba(139,92,246,0.2)" };
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="prose-learnflow text-sm leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => (
+            <h1 className="text-base font-bold text-ink-primary mb-3 mt-0 pb-2 border-b border-surface-border">
+              {children}
+            </h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-xs font-semibold text-brand-300 uppercase tracking-wider mb-2 mt-4">
+              {children}
+            </h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-xs font-semibold text-ink-secondary mb-1.5 mt-3">{children}</h3>
+          ),
+          // Use div instead of p to safely contain block-level children (e.g. pre)
+          p: ({ children }) => (
+            <div className="text-xs text-ink-secondary leading-relaxed mb-2">{children}</div>
+          ),
+          ul: ({ children }) => (
+            <ul className="space-y-1 mb-3 pl-3">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="space-y-1 mb-3 pl-3 list-decimal">{children}</ol>
+          ),
+          li: ({ children }) => (
+            <li className="text-xs text-ink-secondary leading-relaxed flex gap-1.5">
+              <span className="text-brand-400 shrink-0 mt-0.5">•</span>
+              <span>{children}</span>
+            </li>
+          ),
+          // Handle block code via pre — never nest pre inside p
+          pre: ({ children }) => (
+            <pre className={CODE_BLOCK_CLS} style={CODE_BLOCK_STYLE}>
+              {children}
+            </pre>
+          ),
+          code: ({ inline, children }: { inline?: boolean; children?: React.ReactNode }) =>
+            inline ? (
+              <code className="bg-surface-base border border-surface-border rounded px-1 py-0.5 text-xs font-mono text-brand-300">
+                {children}
+              </code>
+            ) : (
+              // Block code — rendered inside the pre above, just pass children
+              <code>{children}</code>
+            ),
+          strong: ({ children }) => (
+            <strong className="font-semibold text-ink-primary">{children}</strong>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-brand/40 pl-3 my-2 text-ink-tertiary italic text-xs">
+              {children}
+            </blockquote>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -127,15 +201,18 @@ export default function ExercisePage() {
   const { isGuest, user, consumeGuestUsage, usage } = useAuth();
   const { awardXP } = useGamification();
 
-  const [topic, setTopic]           = useState(TOPICS[0]);
-  const [difficulty, setDifficulty] = useState<Difficulty>("beginner");
-  const [exercise, setExercise]     = useState<ExerciseData | null>(null);
-  const [code, setCode]             = useState("# Write your solution here\n");
-  const [generating, setGenerating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [debugging, setDebugging]   = useState(false);
-  const [errorMsg, setErrorMsg]     = useState("");
-  const [panel, setPanel]           = useState<SidePanel>("exercise");
+  const [topicInput, setTopicInput]     = useState("");
+  const [topicError, setTopicError]     = useState("");
+  const [difficulty, setDifficulty]     = useState<Difficulty>("beginner");
+  const [exercise, setExercise]         = useState<ExerciseData | null>(null);
+  const [conceptText, setConceptText]   = useState("");
+  const [code, setCode]                 = useState("# Write your solution here\n");
+  const [generating, setGenerating]     = useState(false);
+  const [explaining, setExplaining]     = useState(false);
+  const [submitting, setSubmitting]     = useState(false);
+  const [debugging, setDebugging]       = useState(false);
+  const [errorMsg, setErrorMsg]         = useState("");
+  const [panel, setPanel]               = useState<SidePanel>("exercise");
   const [submitResult, setSubmitResult] = useState<{ status: string; session_id: string } | null>(null);
   const [debugResult, setDebugResult]   = useState<DebugAnalysis | null>(null);
   const [apiError, setApiError]         = useState<string | null>(null);
@@ -144,13 +221,12 @@ export default function ExercisePage() {
   const [showModal, setShowModal]       = useState(false);
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [showSolution, setShowSolution]       = useState(false);
-  const [editorTheme, setEditorTheme] = useState<EditorTheme>("vs-dark");
+  const [editorTheme, setEditorTheme]   = useState<EditorTheme>("vs-dark");
   const [showConfetti, setShowConfetti] = useState(false);
   const sessionId = useRef(newSessionId());
 
   const limitReached = isGuest && usage.exercises >= GUEST_LIMITS.exercises;
 
-  // Persist theme to localStorage
   useEffect(() => {
     const saved = localStorage.getItem(THEME_STORAGE_KEY) as EditorTheme | null;
     if (saved && EDITOR_THEMES.some((t) => t.id === saved)) setEditorTheme(saved);
@@ -164,7 +240,17 @@ export default function ExercisePage() {
 
   const currentThemeMeta = EDITOR_THEMES.find((t) => t.id === editorTheme)!;
 
+  function validateTopic(): boolean {
+    if (!topicInput.trim()) {
+      setTopicError("Please enter a topic");
+      return false;
+    }
+    setTopicError("");
+    return true;
+  }
+
   async function handleGenerate() {
+    if (!validateTopic()) return;
     if (!consumeGuestUsage("exercises")) {
       setShowModal(true);
       return;
@@ -177,7 +263,10 @@ export default function ExercisePage() {
     try {
       const userId = user?.id ?? USER_ID;
       const res = await generateExercise({
-        topic, user_id: userId, session_id: sessionId.current, level: difficulty,
+        topic: topicInput.trim(),
+        user_id: userId,
+        session_id: sessionId.current,
+        level: difficulty,
       });
       setExercise(res.exercise);
       setCode(res.exercise.starter_code ?? "# Write your solution here\n");
@@ -191,13 +280,29 @@ export default function ExercisePage() {
     }
   }
 
+  async function handleExplain() {
+    if (!validateTopic()) return;
+    setExplaining(true);
+    setApiError(null);
+    setConceptText("");
+    setPanel("concept");
+    const userId = user?.id ?? USER_ID;
+    await explainConceptStream(
+      { concept: topicInput.trim(), user_id: userId, session_id: sessionId.current, level: difficulty },
+      (chunk) => setConceptText((prev) => prev + chunk),
+      () => { setExplaining(false); },
+      (err) => { setApiError(err); setExplaining(false); },
+    );
+  }
+
   async function handleSubmit() {
     if (!code.trim() || !exercise) return;
     setSubmitting(true);
     setApiError(null);
     try {
+      const userId = user?.id ?? USER_ID;
       const res = await submitCode({
-        user_id: USER_ID, session_id: sessionId.current,
+        user_id: userId, session_id: sessionId.current,
         code, question: exercise.description,
       });
       setSubmitResult(res);
@@ -216,8 +321,9 @@ export default function ExercisePage() {
     setDebugging(true);
     setApiError(null);
     try {
+      const userId = user?.id ?? USER_ID;
       const res = await debugCode({
-        code, error: errorMsg, user_id: USER_ID,
+        code, error: errorMsg, user_id: userId,
         session_id: sessionId.current, language: "python",
       });
       setDebugResult(res.analysis);
@@ -255,128 +361,148 @@ export default function ExercisePage() {
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
-        className="bg-surface-raised border-b border-surface-border px-4 py-2.5
-                   flex items-center gap-2 flex-wrap shrink-0"
+        className="bg-surface-raised border-b border-surface-border px-4 py-3 shrink-0"
       >
-        {/* Topic select */}
-        <div className="relative">
-          <select
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            aria-label="Topic"
-            className="appearance-none bg-surface-base border border-surface-border rounded-lg
-                       pl-3 pr-7 py-1.5 text-xs text-ink-primary font-medium
-                       focus:outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/20
-                       hover:border-surface-border/80 transition-all duration-200 cursor-pointer"
-          >
-            {TOPICS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-disabled pointer-events-none" />
-        </div>
-
-        {/* Difficulty select */}
-        <div className="relative">
-          <select
-            value={difficulty}
-            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-            aria-label="Difficulty"
-            className="appearance-none bg-surface-base border border-surface-border rounded-lg
-                       pl-3 pr-7 py-1.5 text-xs text-ink-primary font-medium
-                       focus:outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/20
-                       hover:border-surface-border/80 transition-all duration-200 cursor-pointer"
-          >
-            {DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
-          <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-disabled pointer-events-none" />
-        </div>
-
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={limitReached ? () => setShowModal(true) : handleGenerate}
-          loading={generating}
-        >
-          {generating ? "Generating…" : limitReached ? "🔒 Limit reached" : (
-            <span className="flex items-center gap-1.5"><Zap size={12} />Generate</span>
-          )}
-        </Button>
-
-        <GuestUsageBadge feature="exercises" />
-
-        {/* ── Theme picker ── */}
-        <div className="relative ml-auto">
-          <button
-            onClick={() => setShowThemePicker((v) => !v)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
-                       bg-surface-base border border-surface-border text-ink-tertiary
-                       hover:text-ink-secondary hover:border-brand/30 transition-all duration-200"
-            title="Editor theme"
-          >
-            <Palette size={12} />
-            <span className="hidden sm:inline">{currentThemeMeta.label}</span>
-            <span
-              className="w-2.5 h-2.5 rounded-full border border-surface-border shrink-0"
-              style={{ background: currentThemeMeta.bg }}
+        {/* Topic input row */}
+        <div className="flex items-center gap-2 flex-wrap mb-2.5">
+          <div className="flex-1 min-w-[240px] relative">
+            <input
+              type="text"
+              value={topicInput}
+              onChange={(e) => { setTopicInput(e.target.value); if (topicError) setTopicError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
+              placeholder="Enter a topic (e.g., Recursion, Binary Trees, SQL Joins)"
+              className={[
+                "w-full bg-surface-base border rounded-lg px-3 py-2 text-sm text-ink-primary",
+                "placeholder:text-ink-disabled focus:outline-none transition-all duration-200",
+                topicError
+                  ? "border-danger/60 focus:border-danger focus:ring-1 focus:ring-danger/20"
+                  : "border-surface-border focus:border-brand/60 focus:ring-1 focus:ring-brand/20",
+              ].join(" ")}
             />
-          </button>
-
-          <AnimatePresence>
-            {showThemePicker && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                transition={{ duration: 0.15 }}
-                className="absolute right-0 top-full mt-1.5 z-30 bg-surface-raised border border-surface-border
-                           rounded-xl shadow-card-hover overflow-hidden min-w-[140px]"
-              >
-                {EDITOR_THEMES.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => handleThemeChange(t.id)}
-                    className={[
-                      "w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition-colors duration-150",
-                      editorTheme === t.id
-                        ? "bg-brand/10 text-brand-300"
-                        : "text-ink-secondary hover:bg-surface-hover hover:text-ink-primary",
-                    ].join(" ")}
-                  >
-                    <span
-                      className="w-3 h-3 rounded-full border border-surface-border shrink-0"
-                      style={{ background: t.bg }}
-                    />
-                    {t.label}
-                    {editorTheme === t.id && <span className="ml-auto text-brand-400">✓</span>}
-                  </button>
-                ))}
-              </motion.div>
+            {topicError && (
+              <p className="absolute -bottom-5 left-0 text-xs text-danger-light">{topicError}</p>
             )}
-          </AnimatePresence>
+          </div>
+
+          {/* Difficulty select */}
+          <div className="relative">
+            <select
+              value={difficulty}
+              onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+              aria-label="Difficulty"
+              className="appearance-none bg-surface-base border border-surface-border rounded-lg
+                         pl-3 pr-7 py-2 text-xs text-ink-primary font-medium
+                         focus:outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/20
+                         hover:border-surface-border/80 transition-all duration-200 cursor-pointer"
+            >
+              {DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-disabled pointer-events-none" />
+          </div>
         </div>
 
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleRun}
-          disabled={!code.trim()}
-          loading={running}
-        >
-          {running ? "Running…" : (
-            <span className="flex items-center gap-1.5"><Play size={12} />Run</span>
-          )}
-        </Button>
+        {/* Action buttons row */}
+        <div className="flex items-center gap-2 flex-wrap mt-5">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={limitReached ? () => setShowModal(true) : handleGenerate}
+            loading={generating}
+          >
+            {generating ? "Generating…" : limitReached ? "🔒 Limit reached" : (
+              <span className="flex items-center gap-1.5"><Zap size={12} />Generate Exercise</span>
+            )}
+          </Button>
 
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={handleSubmit}
-          disabled={!exercise}
-          loading={submitting}
-        >
-          {submitting ? "Submitting…" : (
-            <span className="flex items-center gap-1.5"><CheckCircle2 size={12} />Submit</span>
-          )}
-        </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleExplain}
+            loading={explaining}
+          >
+            {explaining ? "Explaining…" : (
+              <span className="flex items-center gap-1.5"><BookOpen size={12} />Explain Concept</span>
+            )}
+          </Button>
+
+          <GuestUsageBadge feature="exercises" />
+
+          {/* Theme picker */}
+          <div className="relative ml-auto">
+            <button
+              onClick={() => setShowThemePicker((v) => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
+                         bg-surface-base border border-surface-border text-ink-tertiary
+                         hover:text-ink-secondary hover:border-brand/30 transition-all duration-200"
+              title="Editor theme"
+            >
+              <Palette size={12} />
+              <span className="hidden sm:inline">{currentThemeMeta.label}</span>
+              <span
+                className="w-2.5 h-2.5 rounded-full border border-surface-border shrink-0"
+                style={{ background: currentThemeMeta.bg }}
+              />
+            </button>
+
+            <AnimatePresence>
+              {showThemePicker && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 top-full mt-1.5 z-30 bg-surface-raised border border-surface-border
+                             rounded-xl shadow-card-hover overflow-hidden min-w-[140px]"
+                >
+                  {EDITOR_THEMES.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => handleThemeChange(t.id)}
+                      className={[
+                        "w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition-colors duration-150",
+                        editorTheme === t.id
+                          ? "bg-brand/10 text-brand-300"
+                          : "text-ink-secondary hover:bg-surface-hover hover:text-ink-primary",
+                      ].join(" ")}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-full border border-surface-border shrink-0"
+                        style={{ background: t.bg }}
+                      />
+                      {t.label}
+                      {editorTheme === t.id && <span className="ml-auto text-brand-400">✓</span>}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleRun}
+            disabled={!code.trim()}
+            loading={running}
+          >
+            {running ? "Running…" : (
+              <span className="flex items-center gap-1.5"><Play size={12} />Run</span>
+            )}
+          </Button>
+
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleSubmit}
+            disabled={!exercise}
+            loading={submitting}
+          >
+            {submitting ? "Submitting…" : (
+              <span className="flex items-center gap-1.5"><CheckCircle2 size={12} />Submit</span>
+            )}
+          </Button>
+        </div>
       </motion.div>
 
       {/* ── Main split ──────────────────────────────────────── */}
@@ -440,24 +566,24 @@ export default function ExercisePage() {
           </div>
         </div>
 
-        {/* ── Side panel (hidden on mobile) ─────────────────── */}
+        {/* ── Side panel ────────────────────────────────────── */}
         <aside className="w-72 md:w-80 lg:w-96 shrink-0 bg-surface-raised border-l border-surface-border
                           flex-col overflow-hidden hidden sm:flex">
 
           {/* Tab bar */}
-          <div className="flex border-b border-surface-border shrink-0">
-            {(["exercise", "output", "debug", "result"] as SidePanel[]).map((tab) => (
+          <div className="flex border-b border-surface-border shrink-0 overflow-x-auto">
+            {(["exercise", "concept", "output", "debug", "result"] as SidePanel[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setPanel(tab)}
                 className={[
                   "flex-1 py-2.5 text-xs font-medium capitalize transition-all duration-200",
-                  "flex items-center justify-center gap-1.5",
+                  "flex items-center justify-center gap-1 shrink-0",
                   panel === tab ? "tab-active" : "tab-inactive",
                 ].join(" ")}
               >
                 {PANEL_ICONS[tab]}
-                {tab}
+                <span className="hidden md:inline">{tab}</span>
               </button>
             ))}
           </div>
@@ -466,8 +592,9 @@ export default function ExercisePage() {
             {/* API error */}
             {apiError && <Alert variant="error">{apiError}</Alert>}
 
-            {/* ── Exercise tab ── */}
             <AnimatePresence mode="wait">
+
+              {/* ── Exercise tab ── */}
               {panel === "exercise" && (
                 <motion.div
                   key="exercise"
@@ -485,7 +612,7 @@ export default function ExercisePage() {
                         <Zap size={20} className="text-brand-300" />
                       </div>
                       <p className="text-sm text-ink-tertiary mb-1">No exercise yet</p>
-                      <p className="text-xs text-ink-disabled">Select a topic and click Generate</p>
+                      <p className="text-xs text-ink-disabled">Enter a topic and click Generate Exercise</p>
                     </div>
                   )}
                   {generating && (
@@ -512,11 +639,12 @@ export default function ExercisePage() {
                           {exercise.difficulty}
                         </Badge>
                       </div>
-                      <p className="text-sm text-ink-secondary leading-relaxed mb-5">
-                        {exercise.description}
-                      </p>
+
+                      {/* Render description as markdown */}
+                      <MarkdownContent content={exercise.description} />
+
                       {exercise.hints?.length > 0 && (
-                        <div className="mb-5">
+                        <div className="mt-4">
                           <p className="section-label text-ink-disabled mb-3">Hints</p>
                           <ol className="space-y-2">
                             {exercise.hints.map((h, i) => (
@@ -530,9 +658,10 @@ export default function ExercisePage() {
                           </ol>
                         </div>
                       )}
-                      {/* ── Show Solution toggle ── */}
+
+                      {/* Show Solution toggle */}
                       {exercise.solution && (
-                        <div>
+                        <div className="mt-4">
                           <button
                             onClick={() => setShowSolution((v) => !v)}
                             className="flex items-center gap-2 text-xs font-medium text-ink-disabled
@@ -560,6 +689,53 @@ export default function ExercisePage() {
                               </motion.div>
                             )}
                           </AnimatePresence>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </motion.div>
+              )}
+
+              {/* ── Concept tab ── */}
+              {panel === "concept" && (
+                <motion.div
+                  key="concept"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {!conceptText && !explaining && (
+                    <div className="text-center mt-16">
+                      <div
+                        className="w-12 h-12 rounded-2xl bg-brand/10 flex items-center justify-center mx-auto mb-4"
+                        style={{ boxShadow: "0 0 20px rgba(139,92,246,0.2)" }}
+                      >
+                        <BookOpen size={20} className="text-brand-300" />
+                      </div>
+                      <p className="text-sm text-ink-tertiary mb-1">No explanation yet</p>
+                      <p className="text-xs text-ink-disabled">Enter a topic and click Explain Concept</p>
+                    </div>
+                  )}
+                  {explaining && !conceptText && (
+                    <div className="mt-8 space-y-3">
+                      <div className="h-4 rounded-lg skeleton w-2/3" />
+                      <div className="h-3 rounded-lg skeleton w-full" />
+                      <div className="h-3 rounded-lg skeleton w-5/6" />
+                      <div className="h-3 rounded-lg skeleton w-full" />
+                    </div>
+                  )}
+                  {conceptText && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <MarkdownContent content={conceptText} />
+                      {explaining && (
+                        <div className="flex items-center gap-2 mt-3 text-xs text-ink-disabled">
+                          <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />
+                          Generating…
                         </div>
                       )}
                     </motion.div>
@@ -656,7 +832,6 @@ export default function ExercisePage() {
                       transition={{ duration: 0.3 }}
                       className="space-y-4"
                     >
-                      {/* XP earned card */}
                       <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -718,7 +893,6 @@ export default function ExercisePage() {
                       transition={{ duration: 0.25 }}
                       className="space-y-4"
                     >
-                      {/* Status badge */}
                       <div className="flex items-center gap-2">
                         <div
                           className="w-2 h-2 rounded-full shrink-0"
@@ -735,7 +909,6 @@ export default function ExercisePage() {
                         </span>
                       </div>
 
-                      {/* stdout */}
                       {runResult.stdout && (
                         <div>
                           <p className="section-label text-ink-disabled mb-2">Output</p>
@@ -752,7 +925,6 @@ export default function ExercisePage() {
                         </div>
                       )}
 
-                      {/* stderr */}
                       {runResult.stderr && (
                         <div>
                           <p className="section-label text-danger-light mb-2">Errors</p>
@@ -769,11 +941,8 @@ export default function ExercisePage() {
                         </div>
                       )}
 
-                      {/* Empty output */}
                       {!runResult.stdout && !runResult.stderr && (
-                        <p className="text-xs text-ink-disabled italic">
-                          (no output)
-                        </p>
+                        <p className="text-xs text-ink-disabled italic">(no output)</p>
                       )}
                     </motion.div>
                   )}

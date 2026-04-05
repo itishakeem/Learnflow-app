@@ -3,6 +3,9 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncpg
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -190,6 +193,61 @@ async def on_exercise_completed(event: CloudEvent):
         return {"status": "DROP"}
 
     return {"status": "SUCCESS"}
+
+
+# ---------------------------------------------------------------------------
+# Direct record endpoints — used when Dapr/Kafka is unavailable (local dev)
+# ---------------------------------------------------------------------------
+
+class ConceptRecord(BaseModel):
+    user_id: str
+    session_id: str
+    concept: str
+    level: str = "beginner"
+
+
+class ExerciseRecord(BaseModel):
+    user_id: str
+    session_id: str
+    topic: str
+    level: str = "beginner"
+    score: int | None = None
+
+
+@app.post("/record/concept", status_code=200)
+async def record_concept(req: ConceptRecord):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO concept_events (user_id, session_id, concept, level) VALUES ($1, $2, $3, $4)",
+                req.user_id, req.session_id, req.concept, req.level,
+            )
+        logger.info("Recorded concept user=%s concept=%r", req.user_id, req.concept)
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("DB insert failed (concept_events): %s", exc)
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@app.post("/record/exercise", status_code=200)
+async def record_exercise(req: ExerciseRecord):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO exercise_completions (user_id, session_id, topic, level, score) VALUES ($1, $2, $3, $4, $5)",
+                req.user_id, req.session_id, req.topic, req.level, req.score,
+            )
+        logger.info("Recorded exercise user=%s topic=%r", req.user_id, req.topic)
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("DB insert failed (exercise_completions): %s", exc)
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
 
 # ---------------------------------------------------------------------------

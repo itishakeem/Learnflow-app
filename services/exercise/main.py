@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from datetime import datetime, timezone
 
 import google.generativeai as genai
@@ -27,6 +29,7 @@ TOPIC_NAME     = os.getenv("TOPIC_NAME", "learning.exercise.generated")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "20"))
+PROGRESS_URL   = os.getenv("PROGRESS_URL", "http://localhost:8044")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -38,9 +41,20 @@ _model = genai.GenerativeModel(
     ),
     system_instruction=(
         "You are an expert Python programming tutor who designs hands-on coding exercises. "
-        "Respond with a single valid JSON object with exactly these keys: "
-        "title (string), description (string), starter_code (string), "
-        "hints (array of 2-3 strings), expected_output (string), difficulty (string). "
+        "Respond with a single valid JSON object with exactly these keys:\n"
+        "- title (string): exercise title\n"
+        "- description (string): full exercise description written in Markdown with this structure:\n"
+        "  ## Objective\n  What the student will build or solve.\n\n"
+        "  ## Requirements\n  Bullet list of specific requirements.\n\n"
+        "  ## Beginner Challenge\n  A simpler version or warm-up task.\n\n"
+        "  ## Intermediate Challenge\n  The main task.\n\n"
+        "  ## Advanced Challenge\n  An extension for extra credit.\n\n"
+        "  ## Expected Output\n  Example of what the final output should look like.\n"
+        "- starter_code (string): Python starter code scaffold with comments\n"
+        "- hints (array of 2-3 strings): progressive hints\n"
+        "- expected_output (string): sample output\n"
+        "- difficulty (string): one of beginner/intermediate/advanced\n"
+        "- solution (string): complete working Python solution with comments\n\n"
         "No text outside the JSON."
     ),
 )
@@ -62,7 +76,36 @@ def _generate_exercise(topic: str, level: str, context: str) -> dict:
     return json.loads(response.text or "{}")
 
 
+def _dapr_available() -> bool:
+    """Quick socket check — avoids 60s Dapr health-check timeout when Dapr is not running."""
+    try:
+        with socket.create_connection(("127.0.0.1", 3500), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _record_exercise_direct(user_id: str, session_id: str, topic: str, level: str) -> None:
+    """Directly record exercise to progress service — used when Dapr is unavailable."""
+    try:
+        payload = json.dumps({
+            "user_id": user_id, "session_id": session_id,
+            "topic": topic, "level": level, "score": None,
+        }).encode()
+        req = urllib.request.Request(
+            f"{PROGRESS_URL}/record/exercise", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3)
+        logger.info("Recorded exercise via direct HTTP user=%s topic=%r", user_id, topic)
+    except Exception as exc:
+        logger.warning("Direct exercise record failed (non-fatal): %s", exc)
+
+
 def _publish_event(payload: dict) -> None:
+    if not _dapr_available():
+        logger.debug("Dapr not available — skipping event publish")
+        return
     try:
         from dapr.clients import DaprClient
         with DaprClient() as client:
@@ -124,6 +167,9 @@ async def generate(request: GenerateRequest):
         "timestamp":  datetime.now(timezone.utc).isoformat(),
     }
     asyncio.create_task(run_in_threadpool(_publish_event, event_payload))
+    asyncio.create_task(run_in_threadpool(
+        _record_exercise_direct, request.user_id, request.session_id, request.topic.strip(), level
+    ))
 
     return {
         "status":     "ok",

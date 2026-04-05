@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Brain, Send, RotateCcw, Copy, Check } from "lucide-react";
 import { explainConceptStream, type ConceptResponse } from "@/lib/api";
 import { apiError } from "@/lib/errors";
@@ -330,9 +332,33 @@ export default function ConceptsPage() {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3 }}
-                className="prose-dark text-ink-secondary leading-relaxed text-sm whitespace-pre-wrap pr-8"
+                className="pr-8"
               >
-                {result.explanation}
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h1: ({ children }) => <h1 className="text-base font-bold text-ink-primary mb-3 mt-0 pb-2 border-b border-surface-border">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-xs font-semibold text-brand-300 uppercase tracking-wider mb-2 mt-4">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-xs font-semibold text-ink-secondary mb-1.5 mt-3">{children}</h3>,
+                    // div instead of p to safely contain block-level children (e.g. pre)
+                    p:  ({ children }) => <div className="text-sm text-ink-secondary leading-relaxed mb-2">{children}</div>,
+                    ul: ({ children }) => <ul className="space-y-1 mb-3 pl-3">{children}</ul>,
+                    ol: ({ children }) => <ol className="space-y-1 mb-3 pl-3 list-decimal">{children}</ol>,
+                    li: ({ children }) => <li className="text-sm text-ink-secondary leading-relaxed flex gap-1.5"><span className="text-brand-400 shrink-0 mt-0.5">•</span><span>{children}</span></li>,
+                    // Handle block code via pre — never nest pre inside p
+                    pre: ({ children }) => (
+                      <pre className="bg-surface-base border border-surface-border rounded-xl p-4 text-xs font-mono text-ink-secondary overflow-x-auto whitespace-pre-wrap leading-relaxed my-3" style={{ background: "rgba(15,15,24,0.95)", borderColor: "rgba(139,92,246,0.2)" }}>{children}</pre>
+                    ),
+                    code: ({ inline, children }: { inline?: boolean; children?: React.ReactNode }) =>
+                      inline
+                        ? <code className="bg-surface-base border border-surface-border rounded px-1 py-0.5 text-xs font-mono text-brand-300">{children}</code>
+                        : <code>{children}</code>,
+                    strong: ({ children }) => <strong className="font-semibold text-ink-primary">{children}</strong>,
+                    blockquote: ({ children }) => <blockquote className="border-l-2 border-brand/40 pl-3 my-2 text-ink-tertiary italic text-xs">{children}</blockquote>,
+                  }}
+                >
+                  {result.explanation}
+                </ReactMarkdown>
                 {/* Blinking cursor while streaming */}
                 {loading && (
                   <span

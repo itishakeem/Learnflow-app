@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import time
+import urllib.request
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -25,6 +27,7 @@ TOPIC_NAME     = os.getenv("TOPIC_NAME", "learning.concept.generated")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 STREAM_TIMEOUT = int(os.getenv("STREAM_TIMEOUT", "15"))   # seconds
+PROGRESS_URL   = os.getenv("PROGRESS_URL", "http://localhost:8044")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -32,9 +35,18 @@ _model = genai.GenerativeModel(
     model_name=GEMINI_MODEL,
     generation_config=genai.types.GenerationConfig(temperature=0.7),
     system_instruction=(
-        "You are an expert educational tutor. Explain concepts clearly and concisely, "
-        "using examples and analogies where helpful. Tailor depth and vocabulary to the "
-        "learner's level. Be direct — skip preamble, start the explanation immediately."
+        "You are an expert educational tutor. Always respond in clean, professional Markdown. "
+        "Structure your response EXACTLY as follows:\n\n"
+        "# {Topic Title}\n\n"
+        "## Introduction\n"
+        "A clear, engaging introduction to the concept.\n\n"
+        "## Key Concepts\n"
+        "Bullet points covering the most important ideas.\n\n"
+        "## Examples\n"
+        "Concrete, practical examples with code blocks where relevant (use ```python fences).\n\n"
+        "## Summary\n"
+        "A concise recap of what was covered.\n\n"
+        "Tailor depth and vocabulary to the learner's level. Be direct — no preamble."
     ),
 )
 
@@ -55,8 +67,37 @@ def _cached_explain(concept: str, level: str, context: str) -> str:
     return response.text or ""
 
 
+def _dapr_available() -> bool:
+    """Quick socket check — avoids 60s Dapr health-check timeout when Dapr is not running."""
+    try:
+        with socket.create_connection(("127.0.0.1", 3500), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _record_concept_direct(user_id: str, session_id: str, concept: str, level: str) -> None:
+    """Directly record concept to progress service — used when Dapr is unavailable."""
+    try:
+        payload = json.dumps({
+            "user_id": user_id, "session_id": session_id,
+            "concept": concept, "level": level,
+        }).encode()
+        req = urllib.request.Request(
+            f"{PROGRESS_URL}/record/concept", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3)
+        logger.info("Recorded concept via direct HTTP user=%s concept=%r", user_id, concept)
+    except Exception as exc:
+        logger.warning("Direct concept record failed (non-fatal): %s", exc)
+
+
 def _publish_event(payload: dict) -> None:
     """Fire-and-forget Dapr publish — failures are non-fatal."""
+    if not _dapr_available():
+        logger.debug("Dapr not available — skipping event publish")
+        return
     try:
         from dapr.clients import DaprClient
         with DaprClient() as client:
@@ -138,6 +179,9 @@ async def explain_stream(request: ExplainRequest):
                 "timestamp":   datetime.now(timezone.utc).isoformat(),
             }
             asyncio.create_task(run_in_threadpool(_publish_event, event_payload))
+            asyncio.create_task(run_in_threadpool(
+                _record_concept_direct, request.user_id, request.session_id, concept, level
+            ))
 
             # Signal completion with metadata
             yield f"data: {json.dumps({'done': True, 'session_id': request.session_id, 'concept': concept})}\n\n"
@@ -191,6 +235,9 @@ async def explain(request: ExplainRequest):
         "timestamp":   datetime.now(timezone.utc).isoformat(),
     }
     asyncio.create_task(run_in_threadpool(_publish_event, event_payload))
+    asyncio.create_task(run_in_threadpool(
+        _record_concept_direct, request.user_id, request.session_id, request.concept.strip(), level
+    ))
 
     return {
         "status":      "ok",

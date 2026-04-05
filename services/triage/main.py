@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import socket
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -23,8 +24,19 @@ class InvokeRequest(BaseModel):
     question: str | None = None
 
 
+def _dapr_available() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 3500), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def _publish_event(payload: dict) -> None:
     """Fire-and-forget publish — non-fatal if Dapr is unavailable."""
+    if not _dapr_available():
+        logger.debug("Dapr not available — skipping event publish")
+        return
     try:
         from dapr.clients import DaprClient
         with DaprClient() as client:

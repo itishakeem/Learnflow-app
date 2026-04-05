@@ -59,6 +59,7 @@ export interface ExerciseData {
   expected_output: string;
   difficulty: "beginner" | "intermediate" | "advanced";
   solution?: string;
+  markdown_content?: string;
 }
 
 export interface ExerciseResponse {

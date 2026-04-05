@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import time
 from datetime import datetime, timezone
 
@@ -52,7 +53,18 @@ def _analyze_code(language: str, code: str, error: str) -> dict:
     return json.loads(response.text or "{}")
 
 
+def _dapr_available() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 3500), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def _publish_event(payload: dict) -> None:
+    if not _dapr_available():
+        logger.debug("Dapr not available — skipping event publish")
+        return
     try:
         from dapr.clients import DaprClient
         with DaprClient() as client:
